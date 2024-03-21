@@ -1,8 +1,10 @@
+use display_bytes::display_bytes;
 use normalize_path::NormalizePath;
 use relative_path::RelativePathBuf;
 use std::env;
 use std::path::Path;
 use std::thread;
+use wasi_common::pipe::WritePipe;
 use wasi_common::sync::WasiCtxBuilder;
 use wasmtime::*;
 
@@ -14,11 +16,28 @@ struct Order {
     wasi_processes: Vec<WasiProcess>,
 }
 
-fn run_wasi_process(engine: Engine, module: Module) -> wasmtime::Result<()> {
+struct Logger {
+    name: String,
+}
+
+impl std::io::Write for Logger {
+    fn write(&mut self, buf: &[u8]) -> std::result::Result<usize, std::io::Error> {
+        println!("{}: {}", self.name, display_bytes(buf));
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::result::Result<(), std::io::Error> {
+        Ok(())
+    }
+}
+
+fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s| s)?;
     // TODO: use WasiCtx::new
     let wasi = WasiCtxBuilder::new().build();
+    let stdout = WritePipe::new(logger);
+    wasi.set_stdout(Box::new(stdout.clone()));
     let mut store = Store::new(&engine, wasi);
     linker.module(&mut store, "", &module)?;
     linker
@@ -64,7 +83,15 @@ fn main() -> Result<(), std::io::Error> {
             }
         };
         println!("Starting thread for {}.", input_program_path.display());
-        let handler = thread::spawn(|| run_wasi_process(engine, module));
+        let handler = thread::spawn(move || {
+            run_wasi_process(
+                engine,
+                module,
+                Logger {
+                    name: input_program_path.display().to_string(),
+                },
+            )
+        });
         threads.push(handler);
     }
     for thread in threads {
@@ -73,7 +100,7 @@ fn main() -> Result<(), std::io::Error> {
             Ok(_) => {}
             Err(error) => {
                 println!("One process failed with error: {}.", error);
-                panic!("TO DO");
+                todo!();
             }
         }
     }
