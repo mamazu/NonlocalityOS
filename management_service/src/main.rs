@@ -34,16 +34,18 @@ fn main() -> Result<(), std::io::Error> {
     let order = Order {
         wasi_processes: vec![
             WasiProcess {
-            web_assembly_file: RelativePathBuf::from_path(
-                "example_applications/rust/hello_rust/target/wasm32-wasi/debug/hello_rust.wasm",
-            )
-            .unwrap(),
-        },WasiProcess {
-            web_assembly_file: RelativePathBuf::from_path(
-                "example_applications/rust/idle_service/target/wasm32-wasi/debug/idle_service.wasm",
-            )
-            .unwrap(),
-        }],
+                web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/hello_rust/target/wasm32-wasi/debug/hello_rust.wasm",
+                )
+                .unwrap(),
+            },
+            WasiProcess {
+                web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/idle_service/target/wasm32-wasi/debug/idle_service.wasm",
+                )
+                .unwrap(),
+            }
+        ],
     };
 
     let mut threads = Vec::new();
