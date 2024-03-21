@@ -1,5 +1,6 @@
 # Setup
 
+* install Visual Studio with C++ or whatever
 * install Rust: https://www.rust-lang.org/learn/get-started (tested with Rust 1.77.0)
 
 # Test
