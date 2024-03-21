@@ -1,4 +1,7 @@
 @echo off
+cls || exit /B 1
+call .\format.bat || exit /B 1
+
 setlocal
 set repository=%CD%
 
@@ -30,7 +33,14 @@ cargo build --target %raspberry_pi_target% --config target.aarch64-unknown-linux
 
 popd
 
+rustup target add wasm32-wasi || exit /B 1
+
+pushd management_service || exit /B 1
+call .\test.bat || exit /B 1
+cargo build --target %raspberry_pi_target% --config target.aarch64-unknown-linux-gnu.linker='%CC_aarch64-unknown-linux-gnu%' --release || exit /B 1
+popd
+
 pushd example_applications || exit /B 1
-.\run_all.bat || exit /B 1
+call .\test.bat || exit /B 1
 
 echo Success!
