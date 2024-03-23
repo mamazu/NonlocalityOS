@@ -3,12 +3,14 @@ use normalize_path::NormalizePath;
 use relative_path::RelativePathBuf;
 use std::any::Any;
 use std::env;
+use std::io::Read;
 use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
 use wasi_common::file::{FileAccessMode, FileType};
 use wasi_common::pipe::WritePipe;
 use wasi_common::sync::WasiCtxBuilder;
+use wasi_common::ErrorExt;
 use wasi_common::{WasiCtx, WasiFile};
 use wasmtime::{Caller, Engine, Linker, Module, Store};
 
@@ -35,10 +37,10 @@ impl std::io::Write for Logger {
     }
 }
 
-struct Mirror {}
+struct PlaceholderApi {}
 
 #[wiggle::async_trait]
-impl WasiFile for Mirror {
+impl WasiFile for PlaceholderApi {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -55,8 +57,25 @@ impl WasiFile for Mirror {
         for buffer in _bufs {
             total_size += buffer.len() as u64;
         }
-        println!("Mirror received {} bytes.", total_size);
+        println!("Placeholder API received {} bytes.", total_size);
         Ok(total_size)
+    }
+
+    async fn read_vectored<'a>(
+        &self,
+        _bufs: &mut [std::io::IoSliceMut<'a>],
+    ) -> Result<u64, wasi_common::Error> {
+        let mut data: &[u8] = b"response: success";
+        match data.read_vectored(_bufs) {
+            Ok(bytes_read) => Ok(bytes_read as u64),
+            Err(error) => {
+                println!(
+                    "Reading the response failed (should not happen): {}.",
+                    error
+                );
+                Err(wasi_common::Error::not_supported())
+            }
+        }
     }
 }
 
@@ -73,7 +92,7 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
 
     linker.func_wrap("env", "connect", |caller: Caller<'_, WasiCtx>| {
         println!("connect was called.");
-        let connection = Mirror {};
+        let connection = PlaceholderApi {};
         let connection_fd = caller
             .data()
             .push_file(Box::new(connection), FileAccessMode::all())
