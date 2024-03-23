@@ -227,7 +227,6 @@ fn run_wasi_process(
 ) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s: &mut InterServiceFuncContext| &mut s.wasi)?;
-    // TODO: use WasiCtx::new
     let wasi = WasiCtxBuilder::new().build();
 
     let stdout = WritePipe::new(logger);
