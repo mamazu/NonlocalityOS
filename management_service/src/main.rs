@@ -4,8 +4,10 @@ use relative_path::RelativePathBuf;
 use std::env;
 use std::path::Path;
 use std::thread;
+use wasi_common::file::FileAccessMode;
 use wasi_common::pipe::WritePipe;
 use wasi_common::sync::WasiCtxBuilder;
+use wasi_common::WasiCtx;
 use wasmtime::*;
 
 struct WasiProcess {
@@ -36,14 +38,30 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
     wasi_common::sync::add_to_linker(&mut linker, |s| s)?;
     // TODO: use WasiCtx::new
     let wasi = WasiCtxBuilder::new().build();
+
     let stdout = WritePipe::new(logger);
     wasi.set_stdout(Box::new(stdout.clone()));
-    let mut store = Store::new(&engine, wasi);
-    linker.module(&mut store, "", &module)?;
+
+    let mut store_wasi = Store::new(&engine, wasi);
+
+    linker.func_wrap("env", "connect", |caller: Caller<'_, WasiCtx>| {
+        println!("connect was called.");
+        let test_stream = WritePipe::new(Logger {
+            name: "test".to_string(),
+        });
+        let test_stream_fd = caller
+            .data()
+            .push_file(Box::new(test_stream.clone()), FileAccessMode::all())
+            .unwrap();
+        println!("connect returns FD {}.", test_stream_fd);
+        test_stream_fd
+    })?;
+
+    linker.module(&mut store_wasi, "", &module)?;
     linker
-        .get_default(&mut store, "")?
-        .typed::<(), ()>(&store)?
-        .call(&mut store, ())?;
+        .get_default(&mut store_wasi, "")?
+        .typed::<(), ()>(&store_wasi)?
+        .call(&mut store_wasi, ())?;
     Ok(())
 }
 
@@ -60,10 +78,16 @@ fn main() -> Result<(), std::io::Error> {
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/call_api/target/wasm32-wasi/debug/call_api.wasm",
+                )
+                .unwrap(),
+            },
+            /*WasiProcess {
+                web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/idle_service/target/wasm32-wasi/debug/idle_service.wasm",
                 )
                 .unwrap(),
-            }
+            }*/
         ],
     };
 
