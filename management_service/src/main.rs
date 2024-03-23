@@ -79,25 +79,50 @@ impl WasiFile for InterServiceApiStream {
     }
 }
 
+struct InterServiceApiHub {}
+
+impl InterServiceApiHub {
+    pub fn accept(&self) -> InterServiceApiStream {
+        InterServiceApiStream {}
+    }
+
+    pub fn connect(&self) -> InterServiceApiStream {
+        InterServiceApiStream {}
+    }
+}
+
+struct InterServiceFuncContext {
+    wasi: WasiCtx,
+    api_hub: InterServiceApiHub,
+}
+
 fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime::Result<()> {
+    let api_hub = InterServiceApiHub {};
     let mut linker = Linker::new(&engine);
-    wasi_common::sync::add_to_linker(&mut linker, |s| s)?;
+    wasi_common::sync::add_to_linker(&mut linker, |s: &mut InterServiceFuncContext| &mut s.wasi)?;
     // TODO: use WasiCtx::new
     let wasi = WasiCtxBuilder::new().build();
 
     let stdout = WritePipe::new(logger);
     wasi.set_stdout(Box::new(stdout.clone()));
 
-    let mut store_wasi = Store::new(&engine, wasi);
+    let mut func_context_store = Store::new(
+        &engine,
+        InterServiceFuncContext {
+            wasi: wasi,
+            api_hub: api_hub,
+        },
+    );
 
     linker.func_wrap(
         "env",
         "nonlocality_accept",
-        |caller: Caller<'_, WasiCtx>| {
+        |caller: Caller<'_, InterServiceFuncContext>| {
             println!("nonlocality_accept was called.");
-            let stream = InterServiceApiStream {};
-            let stream_fd = caller
-                .data()
+            let context = caller.data();
+            let stream = context.api_hub.accept();
+            let stream_fd = context
+                .wasi
                 .push_file(Box::new(stream), FileAccessMode::all())
                 .unwrap();
             println!("nonlocality_accept returns FD {}.", stream_fd);
@@ -108,11 +133,12 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
     linker.func_wrap(
         "env",
         "nonlocality_connect",
-        |caller: Caller<'_, WasiCtx>| {
+        |caller: Caller<'_, InterServiceFuncContext>| {
             println!("nonlocality_connect was called.");
-            let stream = InterServiceApiStream {};
-            let stream_fd = caller
-                .data()
+            let context = caller.data();
+            let stream = context.api_hub.connect();
+            let stream_fd = context
+                .wasi
                 .push_file(Box::new(stream), FileAccessMode::all())
                 .unwrap();
             println!("nonlocality_connect returns FD {}.", stream_fd);
@@ -120,11 +146,11 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
         },
     )?;
 
-    linker.module(&mut store_wasi, "", &module)?;
+    linker.module(&mut func_context_store, "", &module)?;
     linker
-        .get_default(&mut store_wasi, "")?
-        .typed::<(), ()>(&store_wasi)?
-        .call(&mut store_wasi, ())?;
+        .get_default(&mut func_context_store, "")?
+        .typed::<(), ()>(&func_context_store)?
+        .call(&mut func_context_store, ())?;
     Ok(())
 }
 
