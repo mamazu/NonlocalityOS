@@ -37,10 +37,10 @@ impl std::io::Write for Logger {
     }
 }
 
-struct PlaceholderApi {}
+struct InterServiceApiStream {}
 
 #[wiggle::async_trait]
-impl WasiFile for PlaceholderApi {
+impl WasiFile for InterServiceApiStream {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -90,16 +90,35 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
 
     let mut store_wasi = Store::new(&engine, wasi);
 
-    linker.func_wrap("env", "connect", |caller: Caller<'_, WasiCtx>| {
-        println!("connect was called.");
-        let connection = PlaceholderApi {};
-        let connection_fd = caller
-            .data()
-            .push_file(Box::new(connection), FileAccessMode::all())
-            .unwrap();
-        println!("connect returns FD {}.", connection_fd);
-        connection_fd
-    })?;
+    linker.func_wrap(
+        "env",
+        "nonlocality_accept",
+        |caller: Caller<'_, WasiCtx>| {
+            println!("nonlocality_accept was called.");
+            let stream = InterServiceApiStream {};
+            let stream_fd = caller
+                .data()
+                .push_file(Box::new(stream), FileAccessMode::all())
+                .unwrap();
+            println!("nonlocality_accept returns FD {}.", stream_fd);
+            stream_fd
+        },
+    )?;
+
+    linker.func_wrap(
+        "env",
+        "nonlocality_connect",
+        |caller: Caller<'_, WasiCtx>| {
+            println!("nonlocality_connect was called.");
+            let stream = InterServiceApiStream {};
+            let stream_fd = caller
+                .data()
+                .push_file(Box::new(stream), FileAccessMode::all())
+                .unwrap();
+            println!("nonlocality_connect returns FD {}.", stream_fd);
+            stream_fd
+        },
+    )?;
 
     linker.module(&mut store_wasi, "", &module)?;
     linker
@@ -117,6 +136,12 @@ fn main() -> ExitCode {
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/hello_rust/target/wasm32-wasi/debug/hello_rust.wasm",
+                )
+                .unwrap(),
+            },
+            WasiProcess {
+                web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/provide_api/target/wasm32-wasi/debug/provide_api.wasm",
                 )
                 .unwrap(),
             },
