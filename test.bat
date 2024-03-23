@@ -17,12 +17,12 @@ cargo run "%compiler_download_url%" "%compiler_archive_path%" "%compiler_unpack_
 
 popd
 
-pushd engine || exit /B 1
+pushd management_service || exit /B 1
 cargo test || exit /B 1
 
 rem build for the Raspberry Pi because compiling stuff on the device itself is very slow
 
-rem this target is duplicated in engine/.cargo/config.toml
+rem this target is duplicated in management_service/.cargo/config.toml
 set raspberry_pi_target=aarch64-unknown-linux-gnu
 
 rustup target add %raspberry_pi_target% || exit /B 1
@@ -31,16 +31,13 @@ set AR_aarch64-unknown-linux-gnu=%compiler_unpack_dir%\%compiler_name%\bin\aarch
 set LD_LIBRARY_PATH=%compiler_unpack_dir%\%compiler_name%\aarch64-none-linux-gnu\libc\lib64
 cargo build --target %raspberry_pi_target% --config target.aarch64-unknown-linux-gnu.linker='%CC_aarch64-unknown-linux-gnu%' --release || exit /B 1
 
-popd
-
 rustup target add wasm32-wasi || exit /B 1
 
-pushd management_service || exit /B 1
 call .\test.bat || exit /B 1
-cargo build --target %raspberry_pi_target% --config target.aarch64-unknown-linux-gnu.linker='%CC_aarch64-unknown-linux-gnu%' --release || exit /B 1
 popd
 
 pushd example_applications || exit /B 1
 call .\test.bat || exit /B 1
+popd
 
 echo Success!

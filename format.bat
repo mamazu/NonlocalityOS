@@ -1,10 +1,6 @@
 @echo off
 echo Formatting..
 
-pushd engine || exit /B 1
-cargo fmt || exit /B 1
-popd
-
 pushd downloader || exit /B 1
 cargo fmt || exit /B 1
 popd
