@@ -1,14 +1,16 @@
 use display_bytes::display_bytes;
 use normalize_path::NormalizePath;
 use relative_path::RelativePathBuf;
+use std::any::Any;
 use std::env;
 use std::path::Path;
+use std::process::ExitCode;
 use std::thread;
-use wasi_common::file::FileAccessMode;
+use wasi_common::file::{FileAccessMode, FileType};
 use wasi_common::pipe::WritePipe;
 use wasi_common::sync::WasiCtxBuilder;
-use wasi_common::WasiCtx;
-use wasmtime::*;
+use wasi_common::{WasiCtx, WasiFile};
+use wasmtime::{Caller, Engine, Linker, Module, Store};
 
 struct WasiProcess {
     web_assembly_file: RelativePathBuf,
@@ -33,6 +35,31 @@ impl std::io::Write for Logger {
     }
 }
 
+struct Mirror {}
+
+#[wiggle::async_trait]
+impl WasiFile for Mirror {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    async fn get_filetype(&self) -> Result<FileType, wasi_common::Error> {
+        Ok(FileType::Unknown)
+    }
+
+    async fn write_vectored<'a>(
+        &self,
+        _bufs: &[std::io::IoSlice<'a>],
+    ) -> Result<u64, wasi_common::Error> {
+        let mut total_size: u64 = 0;
+        for buffer in _bufs {
+            total_size += buffer.len() as u64;
+        }
+        println!("Mirror received {} bytes.", total_size);
+        Ok(total_size)
+    }
+}
+
 fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s| s)?;
@@ -46,15 +73,13 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
 
     linker.func_wrap("env", "connect", |caller: Caller<'_, WasiCtx>| {
         println!("connect was called.");
-        let test_stream = WritePipe::new(Logger {
-            name: "test".to_string(),
-        });
-        let test_stream_fd = caller
+        let connection = Mirror {};
+        let connection_fd = caller
             .data()
-            .push_file(Box::new(test_stream.clone()), FileAccessMode::all())
+            .push_file(Box::new(connection), FileAccessMode::all())
             .unwrap();
-        println!("connect returns FD {}.", test_stream_fd);
-        test_stream_fd
+        println!("connect returns FD {}.", connection_fd);
+        connection_fd
     })?;
 
     linker.module(&mut store_wasi, "", &module)?;
@@ -65,7 +90,7 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
     Ok(())
 }
 
-fn main() -> Result<(), std::io::Error> {
+fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let repository = Path::new(&args[1]).normalize();
     let order = Order {
@@ -118,16 +143,17 @@ fn main() -> Result<(), std::io::Error> {
         });
         threads.push(handler);
     }
+    let mut exit_code = ExitCode::SUCCESS;
     for thread in threads {
         println!("Waiting for a thread to complete.");
         match thread.join().unwrap() {
             Ok(_) => {}
             Err(error) => {
                 println!("One process failed with error: {}.", error);
-                todo!();
+                exit_code = ExitCode::FAILURE;
             }
         }
     }
     println!("All threads completed.");
-    Ok(())
+    exit_code
 }
