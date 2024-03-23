@@ -6,6 +6,7 @@ use std::env;
 use std::io::Read;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::thread;
 use wasi_common::file::{FileAccessMode, FileType};
 use wasi_common::pipe::WritePipe;
@@ -93,11 +94,16 @@ impl InterServiceApiHub {
 
 struct InterServiceFuncContext {
     wasi: WasiCtx,
-    api_hub: InterServiceApiHub,
+    // Somehow it's impossible to reference local variables from wasmtime host functions, so we have to use reference counting for no real reason.
+    api_hub: Arc<InterServiceApiHub>,
 }
 
-fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime::Result<()> {
-    let api_hub = InterServiceApiHub {};
+fn run_wasi_process(
+    engine: Engine,
+    module: Module,
+    logger: Logger,
+    api_hub: Arc<InterServiceApiHub>,
+) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s: &mut InterServiceFuncContext| &mut s.wasi)?;
     // TODO: use WasiCtx::new
@@ -110,7 +116,7 @@ fn run_wasi_process(engine: Engine, module: Module, logger: Logger) -> wasmtime:
         &engine,
         InterServiceFuncContext {
             wasi: wasi,
-            api_hub: api_hub,
+            api_hub: api_hub.clone(),
         },
     );
 
@@ -186,44 +192,50 @@ fn main() -> ExitCode {
         ],
     };
 
-    let mut threads = Vec::new();
-    for wasi_process in order.wasi_processes {
-        let engine = Engine::default();
-        let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
-        let module = match Module::from_file(&engine, &input_program_path) {
-            Ok(module) => module,
-            Err(error) => {
-                println!(
-                    "Could not load {}, error: {}.",
-                    input_program_path.display(),
-                    error
-                );
-                panic!("TO DO");
-            }
-        };
-        println!("Starting thread for {}.", input_program_path.display());
-        let handler = thread::spawn(move || {
-            run_wasi_process(
-                engine,
-                module,
-                Logger {
-                    name: input_program_path.display().to_string(),
-                },
-            )
-        });
-        threads.push(handler);
-    }
-    let mut exit_code = ExitCode::SUCCESS;
-    for thread in threads {
-        println!("Waiting for a thread to complete.");
-        match thread.join().unwrap() {
-            Ok(_) => {}
-            Err(error) => {
-                println!("One process failed with error: {}.", error);
-                exit_code = ExitCode::FAILURE;
+    let api_hub = Arc::new(InterServiceApiHub {});
+    thread::scope(|s| {
+        let mut threads = Vec::new();
+        for wasi_process in order.wasi_processes {
+            let engine = Engine::default();
+            let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
+            let module = match Module::from_file(&engine, &input_program_path) {
+                Ok(module) => module,
+                Err(error) => {
+                    println!(
+                        "Could not load {}, error: {}.",
+                        input_program_path.display(),
+                        error
+                    );
+                    panic!("TO DO");
+                }
+            };
+            println!("Starting thread for {}.", input_program_path.display());
+            let api_hub_2 = api_hub.clone();
+            let handler = s.spawn(move || {
+                run_wasi_process(
+                    engine,
+                    module,
+                    Logger {
+                        name: input_program_path.display().to_string(),
+                    },
+                    api_hub_2,
+                )
+            });
+            threads.push(handler);
+        }
+
+        let mut exit_code = ExitCode::SUCCESS;
+        for thread in threads {
+            println!("Waiting for a thread to complete.");
+            match thread.join().unwrap() {
+                Ok(_) => {}
+                Err(error) => {
+                    println!("One process failed with error: {}.", error);
+                    exit_code = ExitCode::FAILURE;
+                }
             }
         }
-    }
-    println!("All threads completed.");
-    exit_code
+        println!("All threads completed.");
+        exit_code
+    })
 }
