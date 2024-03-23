@@ -1,12 +1,16 @@
 use display_bytes::display_bytes;
 use normalize_path::NormalizePath;
+use os_pipe::{pipe, PipeReader, PipeWriter};
+use promising_future::{future_promise, Promise};
 use relative_path::RelativePathBuf;
 use std::any::Any;
 use std::env;
+use std::fmt;
 use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use wasi_common::file::{FileAccessMode, FileType};
 use wasi_common::pipe::WritePipe;
@@ -38,7 +42,10 @@ impl std::io::Write for Logger {
     }
 }
 
-struct InterServiceApiStream {}
+struct InterServiceApiStream {
+    writer: Mutex<PipeWriter>,
+    reader: Mutex<PipeReader>,
+}
 
 #[wiggle::async_trait]
 impl WasiFile for InterServiceApiStream {
@@ -54,41 +61,120 @@ impl WasiFile for InterServiceApiStream {
         &self,
         _bufs: &[std::io::IoSlice<'a>],
     ) -> Result<u64, wasi_common::Error> {
-        let mut total_size: u64 = 0;
-        for buffer in _bufs {
-            total_size += buffer.len() as u64;
+        let mut writer = match self.writer.lock() {
+            Ok(result) => result,
+            Err(error) => {
+                println!("Could not lock the pipe writer: {}.", error);
+                return Err(wasi_common::Error::not_supported());
+            }
+        };
+        match writer.write_vectored(_bufs) {
+            Ok(written) => {
+                println!("Wrote {} bytes to the pipe.", written);
+                Ok(written as u64)
+            }
+            Err(error) => Err(wasi_common::Error::from(error)),
         }
-        println!("Placeholder API received {} bytes.", total_size);
-        Ok(total_size)
     }
 
     async fn read_vectored<'a>(
         &self,
         _bufs: &mut [std::io::IoSliceMut<'a>],
     ) -> Result<u64, wasi_common::Error> {
-        let mut data: &[u8] = b"response: success";
-        match data.read_vectored(_bufs) {
-            Ok(bytes_read) => Ok(bytes_read as u64),
+        let mut reader = match self.reader.lock() {
+            Ok(result) => result,
             Err(error) => {
-                println!(
-                    "Reading the response failed (should not happen): {}.",
-                    error
-                );
-                Err(wasi_common::Error::not_supported())
+                println!("Could not lock the pipe reader: {}.", error);
+                return Err(wasi_common::Error::not_supported());
             }
+        };
+        match reader.read_vectored(_bufs) {
+            Ok(read) => {
+                println!("Read {} bytes from the pipe.", read);
+                Ok(read as u64)
+            }
+            Err(error) => Err(wasi_common::Error::from(error)),
         }
     }
 }
 
-struct InterServiceApiHub {}
+enum InterServiceApiError {
+    OnlyOneAcceptorSupportedAtTheMoment,
+    UnknownInternalError,
+    CouldNotCreatePipe,
+}
+
+impl fmt::Display for InterServiceApiError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                InterServiceApiError::OnlyOneAcceptorSupportedAtTheMoment =>
+                    "only one acceptor supported at the moment",
+                InterServiceApiError::UnknownInternalError => "unknown internal error",
+                InterServiceApiError::CouldNotCreatePipe => "could not create an OS pipe",
+            }
+        )
+    }
+}
+struct InterServiceApiHub {
+    acceptor: Mutex<Option<Promise<InterServiceApiStream>>>,
+}
 
 impl InterServiceApiHub {
-    pub fn accept(&self) -> InterServiceApiStream {
-        InterServiceApiStream {}
+    pub fn new() -> InterServiceApiHub {
+        InterServiceApiHub {
+            acceptor: Mutex::new(None),
+        }
     }
 
-    pub fn connect(&self) -> InterServiceApiStream {
-        InterServiceApiStream {}
+    pub fn accept(&self) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
+        let (future, promise) = future_promise();
+        {
+            let mut maybe_acceptor = self.acceptor.lock().unwrap();
+            match *maybe_acceptor {
+                Some(_) => return Err(InterServiceApiError::OnlyOneAcceptorSupportedAtTheMoment),
+                None => *maybe_acceptor = Some(promise),
+            }
+        }
+        match future.value() {
+            Some(stream) => Ok(stream),
+            None => Err(InterServiceApiError::UnknownInternalError),
+        }
+    }
+
+    pub fn connect(&self) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
+        let mut maybe_acceptor = self.acceptor.lock().unwrap();
+        match maybe_acceptor.take() {
+            Some(acceptor) => {
+                let upload = match pipe() {
+                    Ok(result) => result,
+                    Err(error) => {
+                        println!("Creating an OS pipe failed with {}.", error);
+                        return Err(InterServiceApiError::CouldNotCreatePipe);
+                    }
+                };
+                let download = match pipe() {
+                    Ok(result) => result,
+                    Err(error) => {
+                        println!("Creating an OS pipe failed with {}.", error);
+                        return Err(InterServiceApiError::CouldNotCreatePipe);
+                    }
+                };
+                let server_side = InterServiceApiStream {
+                    writer: Mutex::new(download.1),
+                    reader: Mutex::new(upload.0),
+                };
+                acceptor.set(server_side);
+                let client_side = InterServiceApiStream {
+                    writer: Mutex::new(upload.1),
+                    reader: Mutex::new(download.0),
+                };
+                Ok(client_side)
+            }
+            None => todo!(),
+        }
     }
 }
 
@@ -126,7 +212,13 @@ fn run_wasi_process(
         |caller: Caller<'_, InterServiceFuncContext>| {
             println!("nonlocality_accept was called.");
             let context = caller.data();
-            let stream = context.api_hub.accept();
+            let stream = match context.api_hub.accept() {
+                Ok(stream) => stream,
+                Err(error) => {
+                    println!("nonlocality_accept failed with {}.", error);
+                    return u32::max_value();
+                }
+            };
             let stream_fd = context
                 .wasi
                 .push_file(Box::new(stream), FileAccessMode::all())
@@ -142,7 +234,13 @@ fn run_wasi_process(
         |caller: Caller<'_, InterServiceFuncContext>| {
             println!("nonlocality_connect was called.");
             let context = caller.data();
-            let stream = context.api_hub.connect();
+            let stream = match context.api_hub.connect() {
+                Ok(stream) => stream,
+                Err(error) => {
+                    println!("nonlocality_connect failed with {}.", error);
+                    return u32::max_value();
+                }
+            };
             let stream_fd = context
                 .wasi
                 .push_file(Box::new(stream), FileAccessMode::all())
@@ -192,7 +290,7 @@ fn main() -> ExitCode {
         ],
     };
 
-    let api_hub = Arc::new(InterServiceApiHub {});
+    let api_hub = Arc::new(InterServiceApiHub::new());
     thread::scope(|s| {
         let mut threads = Vec::new();
         for wasi_process in order.wasi_processes {
@@ -206,7 +304,7 @@ fn main() -> ExitCode {
                         input_program_path.display(),
                         error
                     );
-                    panic!("TO DO");
+                    todo!()
                 }
             };
             println!("Starting thread for {}.", input_program_path.display());
