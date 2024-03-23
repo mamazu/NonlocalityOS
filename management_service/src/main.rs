@@ -4,6 +4,7 @@ use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
 use relative_path::RelativePathBuf;
 use std::any::Any;
+use std::collections::VecDeque;
 use std::env;
 use std::fmt;
 use std::io::Read;
@@ -118,62 +119,96 @@ impl fmt::Display for InterServiceApiError {
         )
     }
 }
+
+enum HubQueue {
+    Accepting(Option<Promise<InterServiceApiStream>>),
+    Connecting(VecDeque<Promise<InterServiceApiStream>>),
+}
+
 struct InterServiceApiHub {
-    acceptor: Mutex<Option<Promise<InterServiceApiStream>>>,
+    queue: Mutex<HubQueue>,
+}
+
+fn create_pair_of_streams(
+) -> std::result::Result<(InterServiceApiStream, InterServiceApiStream), InterServiceApiError> {
+    let upload = match pipe() {
+        Ok(result) => result,
+        Err(error) => {
+            println!("Creating an OS pipe failed with {}.", error);
+            return Err(InterServiceApiError::CouldNotCreatePipe);
+        }
+    };
+    let download = match pipe() {
+        Ok(result) => result,
+        Err(error) => {
+            println!("Creating an OS pipe failed with {}.", error);
+            return Err(InterServiceApiError::CouldNotCreatePipe);
+        }
+    };
+    let server_side = InterServiceApiStream {
+        writer: Mutex::new(download.1),
+        reader: Mutex::new(upload.0),
+    };
+    let client_side = InterServiceApiStream {
+        writer: Mutex::new(upload.1),
+        reader: Mutex::new(download.0),
+    };
+    return Ok((server_side, client_side));
 }
 
 impl InterServiceApiHub {
     pub fn new() -> InterServiceApiHub {
         InterServiceApiHub {
-            acceptor: Mutex::new(None),
+            queue: Mutex::new(HubQueue::Connecting(VecDeque::new())),
         }
     }
 
     pub fn accept(&self) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
-        let (future, promise) = future_promise();
-        {
-            let mut maybe_acceptor = self.acceptor.lock().unwrap();
-            match *maybe_acceptor {
-                Some(_) => return Err(InterServiceApiError::OnlyOneAcceptorSupportedAtTheMoment),
-                None => *maybe_acceptor = Some(promise),
+        let mut queue = self.queue.lock().unwrap();
+        match *queue {
+            HubQueue::Accepting(_) => {
+                Err(InterServiceApiError::OnlyOneAcceptorSupportedAtTheMoment)
             }
-        }
-        match future.value() {
-            Some(stream) => Ok(stream),
-            None => Err(InterServiceApiError::UnknownInternalError),
+            HubQueue::Connecting(ref mut waiting) => match waiting.pop_front() {
+                Some(next_in_line) => {
+                    let (server_side, client_side) = create_pair_of_streams()?;
+                    next_in_line.set(client_side);
+                    Ok(server_side)
+                }
+                None => {
+                    let (future, promise) = future_promise();
+                    *queue = HubQueue::Accepting(Some(promise));
+                    drop(queue);
+                    match future.value() {
+                        Some(stream) => Ok(stream),
+                        None => Err(InterServiceApiError::UnknownInternalError),
+                    }
+                }
+            },
         }
     }
 
     pub fn connect(&self) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
-        let mut maybe_acceptor = self.acceptor.lock().unwrap();
-        match maybe_acceptor.take() {
-            Some(acceptor) => {
-                let upload = match pipe() {
-                    Ok(result) => result,
-                    Err(error) => {
-                        println!("Creating an OS pipe failed with {}.", error);
-                        return Err(InterServiceApiError::CouldNotCreatePipe);
-                    }
+        let mut queue = self.queue.lock().unwrap();
+        match *queue {
+            HubQueue::Accepting(ref mut acceptor) => {
+                let (server_side, client_side) = create_pair_of_streams()?;
+                let acceptor2: Promise<InterServiceApiStream> = match acceptor.take() {
+                    Some(content) => content,
+                    None => panic!(),
                 };
-                let download = match pipe() {
-                    Ok(result) => result,
-                    Err(error) => {
-                        println!("Creating an OS pipe failed with {}.", error);
-                        return Err(InterServiceApiError::CouldNotCreatePipe);
-                    }
-                };
-                let server_side = InterServiceApiStream {
-                    writer: Mutex::new(download.1),
-                    reader: Mutex::new(upload.0),
-                };
-                acceptor.set(server_side);
-                let client_side = InterServiceApiStream {
-                    writer: Mutex::new(upload.1),
-                    reader: Mutex::new(download.0),
-                };
+                acceptor2.set(server_side);
                 Ok(client_side)
             }
-            None => todo!(),
+            HubQueue::Connecting(ref mut waiting) => {
+                let (future, promise) = future_promise();
+                waiting.push_back(promise);
+                drop(queue);
+                match future.value() {
+                    Some(stream) => Ok(stream),
+                    None => Err(InterServiceApiError::UnknownInternalError),
+                }
+            }
         }
     }
 }
