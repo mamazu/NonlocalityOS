@@ -752,6 +752,7 @@ dependencies = [
  "relative-path",
  "wasi-common",
  "wasmtime",
+ "wasmtime-wasi-threads",
  "wiggle",
 ]
 
@@ -1286,6 +1287,7 @@ dependencies = [
  "fs-set-times",
  "io-extras",
  "io-lifetimes",
+ "libc",
  "log",
  "once_cell",
  "rustix",
@@ -1640,6 +1642,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "wasmtime-wasi-threads"
+version = "19.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "096877e2fd36f8874f12a6b5ce0a23e98d6c562a2afa1d2e0360b45ea46eb807"
+dependencies = [
+ "anyhow",
+ "log",
+ "rand",
+ "wasi-common",
+ "wasmtime",
 ]
 
 [[package]]

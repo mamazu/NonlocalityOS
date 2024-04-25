@@ -18,10 +18,13 @@ use wasi_common::pipe::WritePipe;
 use wasi_common::sync::WasiCtxBuilder;
 use wasi_common::ErrorExt;
 use wasi_common::{WasiCtx, WasiFile};
+use wasmtime::Config;
 use wasmtime::{Caller, Engine, Linker, Module, Store};
+use wasmtime_wasi_threads::WasiThreadsCtx;
 
 struct WasiProcess {
     web_assembly_file: RelativePathBuf,
+    has_threads: bool,
 }
 
 struct Order {
@@ -213,8 +216,10 @@ impl InterServiceApiHub {
     }
 }
 
+#[derive(Clone)]
 struct InterServiceFuncContext {
     wasi: WasiCtx,
+    wasi_threads: Option<Arc<WasiThreadsCtx<InterServiceFuncContext>>>,
     // Somehow it's impossible to reference local variables from wasmtime host functions, so we have to use reference counting for no real reason.
     api_hub: Arc<InterServiceApiHub>,
 }
@@ -224,6 +229,7 @@ fn run_wasi_process(
     module: Module,
     logger: Logger,
     api_hub: Arc<InterServiceApiHub>,
+    has_threads: bool,
 ) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s: &mut InterServiceFuncContext| &mut s.wasi)?;
@@ -231,14 +237,6 @@ fn run_wasi_process(
 
     let stdout = WritePipe::new(logger);
     wasi.set_stdout(Box::new(stdout.clone()));
-
-    let mut func_context_store = Store::new(
-        &engine,
-        InterServiceFuncContext {
-            wasi: wasi,
-            api_hub: api_hub.clone(),
-        },
-    );
 
     linker.func_wrap(
         "env",
@@ -284,7 +282,34 @@ fn run_wasi_process(
         },
     )?;
 
-    linker.module(&mut func_context_store, "", &module)?;
+    let mut func_context_store = Store::new(
+        &engine,
+        InterServiceFuncContext {
+            wasi: wasi,
+            wasi_threads: None,
+            api_hub: api_hub.clone(),
+        },
+    );
+
+    if has_threads {
+        println!("Threads are enabled.");
+        wasmtime_wasi_threads::add_to_linker(
+            &mut linker,
+            &func_context_store,
+            &module,
+            |s: &mut InterServiceFuncContext| &mut s.wasi_threads.as_ref().unwrap(),
+        )
+        .expect("Tried to add threads to the linker");
+        func_context_store.data_mut().wasi_threads = Some(Arc::new(WasiThreadsCtx::new(
+            module.clone(),
+            Arc::new(linker.clone()),
+        )?));
+    }
+
+    linker
+        .module(&mut func_context_store, "", &module)
+        .expect("Tried to module the main module, whatever that means");
+
     linker
         .get_default(&mut func_context_store, "")?
         .typed::<(), ()>(&func_context_store)?
@@ -302,36 +327,42 @@ fn main() -> ExitCode {
                     "example_applications/rust/hello_rust/target/wasm32-wasi/debug/hello_rust.wasm",
                 )
                 .unwrap(),
+                has_threads: false,
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/essrpc_server/target/wasm32-wasi/debug/essrpc_server.wasm",
+                    "example_applications/rust/essrpc_server/target/wasm32-wasip1-threads/debug/essrpc_server.wasm",
                 )
                 .unwrap(),
+                has_threads: true,
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/essrpc_client/target/wasm32-wasi/debug/essrpc_client.wasm",
                 )
                 .unwrap(),
+                has_threads: false,
             },
             /*WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/provide_api/target/wasm32-wasi/debug/provide_api.wasm",
                 )
                 .unwrap(),
+                has_threads: false,
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/call_api/target/wasm32-wasi/debug/call_api.wasm",
                 )
                 .unwrap(),
+                has_threads: false,
             },*/
             /*WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/idle_service/target/wasm32-wasi/debug/idle_service.wasm",
                 )
                 .unwrap(),
+                has_threads: false,
             }*/
         ],
     };
@@ -340,7 +371,15 @@ fn main() -> ExitCode {
     thread::scope(|s| {
         let mut threads = Vec::new();
         for wasi_process in order.wasi_processes {
-            let engine = Engine::default();
+            let mut config = Config::new();
+            config.wasm_threads(wasi_process.has_threads);
+            let engine = match Engine::new(&config) {
+                Ok(success) => success,
+                Err(error) => {
+                    println!("Could not create wasmtime engine: {}.", error);
+                    continue;
+                }
+            };
             let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
             let module = match Module::from_file(&engine, &input_program_path) {
                 Ok(module) => module,
@@ -363,6 +402,7 @@ fn main() -> ExitCode {
                         name: input_program_path.display().to_string(),
                     },
                     api_hub_2,
+                    wasi_process.has_threads,
                 )
             });
             threads.push(handler);
