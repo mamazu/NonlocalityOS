@@ -305,6 +305,18 @@ fn main() -> ExitCode {
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/essrpc_server/target/wasm32-wasi/debug/essrpc_server.wasm",
+                )
+                .unwrap(),
+            },
+            WasiProcess {
+                web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/essrpc_client/target/wasm32-wasi/debug/essrpc_client.wasm",
+                )
+                .unwrap(),
+            },
+            /*WasiProcess {
+                web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/provide_api/target/wasm32-wasi/debug/provide_api.wasm",
                 )
                 .unwrap(),
@@ -314,7 +326,7 @@ fn main() -> ExitCode {
                     "example_applications/rust/call_api/target/wasm32-wasi/debug/call_api.wasm",
                 )
                 .unwrap(),
-            },
+            },*/
             /*WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/idle_service/target/wasm32-wasi/debug/idle_service.wasm",

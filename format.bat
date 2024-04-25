@@ -9,6 +9,14 @@ pushd management_service || exit /B 1
 cargo fmt || exit /B 1
 popd
 
+pushd example_applications\rust\essrpc_server || exit /B 1
+cargo fmt || exit /B 1
+popd
+
+pushd example_applications\rust\essrpc_client || exit /B 1
+cargo fmt || exit /B 1
+popd
+
 pushd example_applications\rust\hello_rust || exit /B 1
 cargo fmt || exit /B 1
 popd
