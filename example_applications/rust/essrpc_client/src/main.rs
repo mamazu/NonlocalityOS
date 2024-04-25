@@ -12,7 +12,7 @@ pub trait Foo {
 
 fn main() {
     println!("Connecting to an API..");
-    let api_fd = unsafe { nonlocality_connect() };
+    let api_fd = unsafe { nonlocality_connect(1) };
     println!("Connected to an API..");
     let file = unsafe { std::fs::File::from_raw_fd(api_fd) };
     let client = FooRPCClient::new(BincodeTransport::new(file));

@@ -224,6 +224,12 @@ struct InterServiceFuncContext {
     api_hub: Arc<InterServiceApiHub>,
 }
 
+// Absolutely ridiculous hack necessary because it is impossible to return multiple values,
+// or return things by reference parameter in wasmtime.
+fn encode_i32_pair(first: i32, second: i32) -> u64 {
+    (((first as u32) as u64) << 32) | ((second as u32) as u64)
+}
+
 fn run_wasi_process(
     engine: Engine,
     module: Module,
@@ -238,49 +244,59 @@ fn run_wasi_process(
     let stdout = WritePipe::new(logger);
     wasi.set_stdout(Box::new(stdout.clone()));
 
-    linker.func_wrap(
-        "env",
-        "nonlocality_accept",
-        |caller: Caller<'_, InterServiceFuncContext>| {
-            println!("nonlocality_accept was called.");
-            let context = caller.data();
-            let stream = match context.api_hub.accept() {
-                Ok(stream) => stream,
-                Err(error) => {
-                    println!("nonlocality_accept failed with {}.", error);
-                    return u32::max_value();
-                }
-            };
-            let stream_fd = context
-                .wasi
-                .push_file(Box::new(stream), FileAccessMode::all())
-                .unwrap();
-            println!("nonlocality_accept returns FD {}.", stream_fd);
-            stream_fd
-        },
-    )?;
+    println!("Defining nonlocality_accept.");
+    linker
+        .func_wrap(
+            "env",
+            "nonlocality_accept",
+            |caller: Caller<'_, InterServiceFuncContext>| -> u64 {
+                println!("nonlocality_accept was called.");
+                let context = caller.data();
+                let stream = match context.api_hub.accept() {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        println!("nonlocality_accept failed with {}.", error);
+                        return encode_i32_pair(i32::max_value(), i32::max_value());
+                    }
+                };
+                let file_descriptor = context
+                    .wasi
+                    .push_file(Box::new(stream), FileAccessMode::all())
+                    .unwrap() as i32;
+                println!("nonlocality_accept returns FD {}.", file_descriptor);
+                let interface = 0i32;
+                encode_i32_pair(interface, file_descriptor)
+            },
+        )
+        .expect("Tried to define nonlocality_accept");
 
-    linker.func_wrap(
-        "env",
-        "nonlocality_connect",
-        |caller: Caller<'_, InterServiceFuncContext>| {
-            println!("nonlocality_connect was called.");
-            let context = caller.data();
-            let stream = match context.api_hub.connect() {
-                Ok(stream) => stream,
-                Err(error) => {
-                    println!("nonlocality_connect failed with {}.", error);
-                    return u32::max_value();
-                }
-            };
-            let stream_fd = context
-                .wasi
-                .push_file(Box::new(stream), FileAccessMode::all())
-                .unwrap();
-            println!("nonlocality_connect returns FD {}.", stream_fd);
-            stream_fd
-        },
-    )?;
+    println!("Defining nonlocality_connect.");
+    linker
+        .func_wrap(
+            "env",
+            "nonlocality_connect",
+            |caller: Caller<'_, InterServiceFuncContext>, interface: i32| {
+                println!(
+                    "nonlocality_connect was called for interface {}.",
+                    interface
+                );
+                let context = caller.data();
+                let stream = match context.api_hub.connect() {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        println!("nonlocality_connect failed with {}.", error);
+                        return u32::max_value();
+                    }
+                };
+                let stream_fd = context
+                    .wasi
+                    .push_file(Box::new(stream), FileAccessMode::all())
+                    .unwrap();
+                println!("nonlocality_connect returns FD {}.", stream_fd);
+                stream_fd
+            },
+        )
+        .expect("Tried to define nonlocality_connect");
 
     let mut func_context_store = Store::new(
         &engine,
@@ -300,20 +316,29 @@ fn run_wasi_process(
             |s: &mut InterServiceFuncContext| &mut s.wasi_threads.as_ref().unwrap(),
         )
         .expect("Tried to add threads to the linker");
-        func_context_store.data_mut().wasi_threads = Some(Arc::new(WasiThreadsCtx::new(
-            module.clone(),
-            Arc::new(linker.clone()),
-        )?));
+        func_context_store.data_mut().wasi_threads = Some(Arc::new(
+            WasiThreadsCtx::new(module.clone(), Arc::new(linker.clone()))
+                .expect("Tried to create a context"),
+        ));
+    } else {
+        println!("Threads are not enabled.");
     }
 
+    println!("Setting up the main module or something.");
     linker
         .module(&mut func_context_store, "", &module)
         .expect("Tried to module the main module, whatever that means");
 
-    linker
-        .get_default(&mut func_context_store, "")?
-        .typed::<(), ()>(&func_context_store)?
-        .call(&mut func_context_store, ())?;
+    println!("Calling main function.");
+    let entry_point = linker
+        .get_default(&mut func_context_store, "")
+        .expect("Tried to find the main entry point of the application");
+    let typed_entry_point = entry_point
+        .typed::<(), ()>(&func_context_store)
+        .expect("Tried to cast the main entry point function type");
+    typed_entry_point
+        .call(&mut func_context_store, ())
+        .expect("Tried to call the main entry point");
     Ok(())
 }
 

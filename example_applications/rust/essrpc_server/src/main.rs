@@ -2,7 +2,7 @@ use essrpc::essrpc;
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCError;
 use essrpc::RPCServer;
-use nonlocality_env::nonlocality_accept;
+use nonlocality_env::accept;
 use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
 use std::sync::atomic::AtomicBool;
 
@@ -28,10 +28,12 @@ fn main() {
 
     let background_acceptor = std::thread::spawn(move || {
         println!("Accepting an API client..");
-        let api_fd = unsafe { nonlocality_accept() };
-        println!("Accepted an API client..");
-        let file = unsafe { std::fs::File::from_raw_fd(api_fd) };
-        let mut server = FooRPCServer::new(FooImpl {}, BincodeTransport::new(file));
+        let accepted = accept();
+        println!(
+            "Accepted an API client for interface {}.",
+            accepted.interface
+        );
+        let mut server = FooRPCServer::new(FooImpl {}, BincodeTransport::new(accepted.stream));
         match server.serve() {
             Ok(()) => {
                 println!("Serve completed successfully.");
