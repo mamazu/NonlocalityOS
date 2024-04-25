@@ -24,3 +24,11 @@ popd
 pushd example_applications\rust\call_api || exit /B 1
 cargo fmt || exit /B 1
 popd
+
+pushd example_applications\rust\capnproto_server || exit /B 1
+cargo fmt || exit /B 1
+popd
+
+pushd example_applications\rust\capnproto_client || exit /B 1
+cargo fmt || exit /B 1
+popd

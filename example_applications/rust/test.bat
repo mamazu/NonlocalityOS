@@ -14,3 +14,11 @@ popd
 pushd call_api || exit /B 1
 call .\test.bat || exit /B 1
 popd
+
+pushd capnproto_server || exit /B 1
+call .\test.bat || exit /B 1
+popd
+
+pushd capnproto_client || exit /B 1
+call .\test.bat || exit /B 1
+popd

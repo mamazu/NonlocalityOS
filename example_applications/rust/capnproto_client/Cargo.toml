@@ -1,0 +1,20 @@
+[package]
+
+name = "capnproto_client"
+version = "0.0.0"
+edition = "2021"
+
+build = "build.rs"
+
+[[bin]]
+name = "capnproto_client"
+path = "client.rs"
+
+[build-dependencies]
+capnpc = "0.19.0"
+
+[dependencies]
+capnp-rpc = "0.19.0"
+futures = "0.3.0"
+tokio = { version = "1.0.0", features = ["net", "rt", "macros"]}
+tokio-util = { version = "0.7.4", features = ["compat"] }
