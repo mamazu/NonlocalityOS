@@ -19,3 +19,8 @@ pub fn accept() -> Accepted {
     let stream = unsafe { File::from_raw_fd((encoded_result & (u32::max_value() as u64)) as i32) };
     Accepted { interface, stream }
 }
+
+#[cfg(target_os = "windows")]
+pub fn accept() -> Accepted {
+    todo!();
+}

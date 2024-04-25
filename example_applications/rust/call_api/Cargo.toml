@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 display_bytes = "0.2.1"
+nonlocality_env = { path ="../../../nonlocality_env" }

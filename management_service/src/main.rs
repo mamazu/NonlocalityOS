@@ -4,6 +4,7 @@ use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
 use relative_path::RelativePathBuf;
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::env;
 use std::fmt;
@@ -22,9 +23,17 @@ use wasmtime::Config;
 use wasmtime::{Caller, Engine, Linker, Module, Store};
 use wasmtime_wasi_threads::WasiThreadsCtx;
 
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
+struct InterfaceId(i32);
+
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
+struct ServiceId(i32);
+
 struct WasiProcess {
     web_assembly_file: RelativePathBuf,
     has_threads: bool,
+    id: ServiceId,
+    interfaces: BTreeMap<InterfaceId, (ServiceId, InterfaceId)>,
 }
 
 struct Order {
@@ -123,15 +132,6 @@ impl fmt::Display for InterServiceApiError {
     }
 }
 
-enum HubQueue {
-    Accepting(Option<Promise<InterServiceApiStream>>),
-    Connecting(VecDeque<Promise<InterServiceApiStream>>),
-}
-
-struct InterServiceApiHub {
-    queue: Mutex<HubQueue>,
-}
-
 fn create_pair_of_streams(
 ) -> std::result::Result<(InterServiceApiStream, InterServiceApiStream), InterServiceApiError> {
     let upload = match pipe() {
@@ -159,15 +159,35 @@ fn create_pair_of_streams(
     return Ok((server_side, client_side));
 }
 
+struct AcceptResult {
+    interface: InterfaceId,
+    stream: InterServiceApiStream,
+}
+
+enum HubQueue {
+    Accepting(Option<Promise<AcceptResult>>),
+    Connecting(VecDeque<(InterfaceId, Promise<InterServiceApiStream>)>),
+}
+
+struct InterServiceApiHub {
+    queue: Mutex<std::collections::BTreeMap<ServiceId, HubQueue>>,
+}
+
 impl InterServiceApiHub {
     pub fn new() -> InterServiceApiHub {
         InterServiceApiHub {
-            queue: Mutex::new(HubQueue::Connecting(VecDeque::new())),
+            queue: Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 
-    pub fn accept(&self) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
-        let mut queue = self.queue.lock().unwrap();
+    pub fn accept(
+        &self,
+        accepting_service: ServiceId,
+    ) -> std::result::Result<AcceptResult, InterServiceApiError> {
+        let mut locked = self.queue.lock().unwrap();
+        let queue = locked
+            .entry(accepting_service)
+            .or_insert_with(|| HubQueue::Connecting(VecDeque::new()));
         match *queue {
             HubQueue::Accepting(_) => {
                 Err(InterServiceApiError::OnlyOneAcceptorSupportedAtTheMoment)
@@ -175,15 +195,18 @@ impl InterServiceApiHub {
             HubQueue::Connecting(ref mut waiting) => match waiting.pop_front() {
                 Some(next_in_line) => {
                     let (server_side, client_side) = create_pair_of_streams()?;
-                    next_in_line.set(client_side);
-                    Ok(server_side)
+                    next_in_line.1.set(client_side);
+                    Ok(AcceptResult {
+                        interface: next_in_line.0,
+                        stream: server_side,
+                    })
                 }
                 None => {
                     let (future, promise) = future_promise();
                     *queue = HubQueue::Accepting(Some(promise));
-                    drop(queue);
+                    drop(locked);
                     match future.value() {
-                        Some(stream) => Ok(stream),
+                        Some(accept_result) => Ok(accept_result),
                         None => Err(InterServiceApiError::UnknownInternalError),
                     }
                 }
@@ -191,22 +214,32 @@ impl InterServiceApiHub {
         }
     }
 
-    pub fn connect(&self) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
-        let mut queue = self.queue.lock().unwrap();
+    pub fn connect(
+        &self,
+        destination_service: ServiceId,
+        interface: InterfaceId,
+    ) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
+        let mut locked = self.queue.lock().unwrap();
+        let queue = locked
+            .entry(destination_service)
+            .or_insert_with(|| HubQueue::Connecting(VecDeque::new()));
         match *queue {
             HubQueue::Accepting(ref mut acceptor) => {
                 let (server_side, client_side) = create_pair_of_streams()?;
-                let acceptor2: Promise<InterServiceApiStream> = match acceptor.take() {
+                let acceptor2: Promise<AcceptResult> = match acceptor.take() {
                     Some(content) => content,
                     None => panic!(),
                 };
-                acceptor2.set(server_side);
+                acceptor2.set(AcceptResult {
+                    interface: interface,
+                    stream: server_side,
+                });
                 Ok(client_side)
             }
             HubQueue::Connecting(ref mut waiting) => {
                 let (future, promise) = future_promise();
-                waiting.push_back(promise);
-                drop(queue);
+                waiting.push_back((interface, promise));
+                drop(locked);
                 match future.value() {
                     Some(stream) => Ok(stream),
                     None => Err(InterServiceApiError::UnknownInternalError),
@@ -222,6 +255,8 @@ struct InterServiceFuncContext {
     wasi_threads: Option<Arc<WasiThreadsCtx<InterServiceFuncContext>>>,
     // Somehow it's impossible to reference local variables from wasmtime host functions, so we have to use reference counting for no real reason.
     api_hub: Arc<InterServiceApiHub>,
+    this_service_id: ServiceId,
+    outgoing_interfaces: Arc<std::collections::BTreeMap<InterfaceId, (ServiceId, InterfaceId)>>,
 }
 
 // Absolutely ridiculous hack necessary because it is impossible to return multiple values,
@@ -236,6 +271,8 @@ fn run_wasi_process(
     logger: Logger,
     api_hub: Arc<InterServiceApiHub>,
     has_threads: bool,
+    this_service_id: ServiceId,
+    outgoing_interfaces: Arc<std::collections::BTreeMap<InterfaceId, (ServiceId, InterfaceId)>>,
 ) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s: &mut InterServiceFuncContext| &mut s.wasi)?;
@@ -252,8 +289,8 @@ fn run_wasi_process(
             |caller: Caller<'_, InterServiceFuncContext>| -> u64 {
                 println!("nonlocality_accept was called.");
                 let context = caller.data();
-                let stream = match context.api_hub.accept() {
-                    Ok(stream) => stream,
+                let accept_result = match context.api_hub.accept(context.this_service_id) {
+                    Ok(success) => success,
                     Err(error) => {
                         println!("nonlocality_accept failed with {}.", error);
                         return encode_i32_pair(i32::max_value(), i32::max_value());
@@ -261,11 +298,10 @@ fn run_wasi_process(
                 };
                 let file_descriptor = context
                     .wasi
-                    .push_file(Box::new(stream), FileAccessMode::all())
+                    .push_file(Box::new(accept_result.stream), FileAccessMode::all())
                     .unwrap() as i32;
                 println!("nonlocality_accept returns FD {}.", file_descriptor);
-                let interface = 0i32;
-                encode_i32_pair(interface, file_descriptor)
+                encode_i32_pair(accept_result.interface.0, file_descriptor)
             },
         )
         .expect("Tried to define nonlocality_accept");
@@ -275,23 +311,31 @@ fn run_wasi_process(
         .func_wrap(
             "env",
             "nonlocality_connect",
-            |caller: Caller<'_, InterServiceFuncContext>, interface: i32| {
+            |caller: Caller<'_, InterServiceFuncContext>, interface: i32| -> i32 {
                 println!(
                     "nonlocality_connect was called for interface {}.",
                     interface
                 );
                 let context = caller.data();
-                let stream = match context.api_hub.connect() {
+                let outgoing_interface =
+                    match context.outgoing_interfaces.get(&InterfaceId(interface)) {
+                        Some(found) => found,
+                        None => todo!(),
+                    };
+                let stream = match context
+                    .api_hub
+                    .connect(outgoing_interface.0, outgoing_interface.1)
+                {
                     Ok(stream) => stream,
                     Err(error) => {
                         println!("nonlocality_connect failed with {}.", error);
-                        return u32::max_value();
+                        return i32::max_value();
                     }
                 };
                 let stream_fd = context
                     .wasi
                     .push_file(Box::new(stream), FileAccessMode::all())
-                    .unwrap();
+                    .unwrap() as i32;
                 println!("nonlocality_connect returns FD {}.", stream_fd);
                 stream_fd
             },
@@ -304,6 +348,8 @@ fn run_wasi_process(
             wasi: wasi,
             wasi_threads: None,
             api_hub: api_hub.clone(),
+            this_service_id: this_service_id,
+            outgoing_interfaces: outgoing_interfaces,
         },
     );
 
@@ -353,6 +399,8 @@ fn main() -> ExitCode {
                 )
                 .unwrap(),
                 has_threads: false,
+               id:   ServiceId(0),
+               interfaces: BTreeMap::new(),
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
@@ -360,6 +408,8 @@ fn main() -> ExitCode {
                 )
                 .unwrap(),
                 has_threads: true,
+                id:   ServiceId(1),
+                interfaces: BTreeMap::new(),
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
@@ -367,13 +417,17 @@ fn main() -> ExitCode {
                 )
                 .unwrap(),
                 has_threads: false,
+                id:   ServiceId(2),
+                interfaces: BTreeMap::from([( InterfaceId(0), (ServiceId(1), InterfaceId(0)))] ),
             },
-            /*WasiProcess {
+            WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/provide_api/target/wasm32-wasi/debug/provide_api.wasm",
                 )
                 .unwrap(),
                 has_threads: false,
+                id:   ServiceId(3),
+                interfaces: BTreeMap::new(),
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
@@ -381,13 +435,17 @@ fn main() -> ExitCode {
                 )
                 .unwrap(),
                 has_threads: false,
-            },*/
+                id:   ServiceId(4),
+                interfaces: BTreeMap::from([( InterfaceId(0), (ServiceId(3), InterfaceId(0)))] ),
+            },
             /*WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/idle_service/target/wasm32-wasi/debug/idle_service.wasm",
                 )
                 .unwrap(),
                 has_threads: false,
+                id: ServiceId(5),
+                interfaces: BTreeMap::new(),
             }*/
         ],
     };
@@ -419,6 +477,8 @@ fn main() -> ExitCode {
             };
             println!("Starting thread for {}.", input_program_path.display());
             let api_hub_2 = api_hub.clone();
+            let this_service_id = wasi_process.id;
+            let interfaces = Arc::new(wasi_process.interfaces.clone());
             let handler = s.spawn(move || {
                 run_wasi_process(
                     engine,
@@ -428,6 +488,8 @@ fn main() -> ExitCode {
                     },
                     api_hub_2,
                     wasi_process.has_threads,
+                    this_service_id,
+                    interfaces,
                 )
             });
             threads.push(handler);

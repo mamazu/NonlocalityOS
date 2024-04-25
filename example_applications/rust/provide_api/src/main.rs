@@ -1,23 +1,19 @@
 use display_bytes::display_bytes;
+use nonlocality_env::accept;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
-#[cfg(any(unix, target_os = "wasi"))]
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
 
-extern "C" {
-    fn nonlocality_accept() -> i32;
-}
-
-#[cfg(any(unix, target_os = "wasi"))]
 fn main() -> Result<(), std::io::Error> {
     println!("Accepting an API client..");
-    let api_fd = unsafe { nonlocality_accept() };
-    println!("Accepted an API client..");
-    let mut file = unsafe { File::from_raw_fd(api_fd) };
+    let mut accepted = accept();
+    println!(
+        "Accepted an API client for interface{}.",
+        accepted.interface
+    );
 
     let mut read_buffer = [0; 10];
-    let request = match file.read_exact(&mut read_buffer) {
+    let request = match accepted.stream.read_exact(&mut read_buffer) {
         Ok(_) => {
             let request = std::str::from_utf8(&read_buffer).unwrap();
             println!("Read request: {}.", request);
@@ -34,7 +30,7 @@ fn main() -> Result<(), std::io::Error> {
     } else {
         "unknown request!!"
     };
-    match write!(&mut file, "{}", response) {
+    match write!(&mut accepted.stream, "{}", response) {
         Ok(_) => {
             println!("Wrote response.");
         }

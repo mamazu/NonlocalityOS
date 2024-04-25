@@ -7,6 +7,7 @@ name = "call_api"
 version = "0.1.0"
 dependencies = [
  "display_bytes",
+ "nonlocality_env",
 ]
 
 [[package]]
@@ -14,3 +15,7 @@ name = "display_bytes"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa333c37992bc9a2ca345cac27e7f150e97740a92daaeb488c98292d83329803"
+
+[[package]]
+name = "nonlocality_env"
+version = "0.1.0"
