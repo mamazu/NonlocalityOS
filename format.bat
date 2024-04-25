@@ -9,6 +9,10 @@ pushd management_service || exit /B 1
 cargo fmt || exit /B 1
 popd
 
+pushd nonlocality_env || exit /B 1
+cargo fmt || exit /B 1
+popd
+
 pushd example_applications\rust\essrpc_server || exit /B 1
 cargo fmt || exit /B 1
 popd

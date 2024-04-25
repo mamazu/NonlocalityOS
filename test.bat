@@ -37,6 +37,10 @@ rustup target add wasm32-wasip1-threads --toolchain nightly || exit /B 1
 call .\test.bat || exit /B 1
 popd
 
+pushd nonlocality_env || exit /B 1
+call .\test.bat || exit /B 1
+popd
+
 pushd example_applications || exit /B 1
 call .\test.bat || exit /B 1
 popd

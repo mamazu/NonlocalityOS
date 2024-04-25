@@ -2,11 +2,8 @@ use essrpc::essrpc;
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCClient;
 use essrpc::RPCError;
+use nonlocality_env::nonlocality_connect;
 use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
-
-extern "C" {
-    fn nonlocality_connect() -> i32;
-}
 
 #[essrpc]
 pub trait Foo {
