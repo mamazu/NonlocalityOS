@@ -14,3 +14,7 @@ popd
 pushd call_api || exit /B 1
 call .\test.bat || exit /B 1
 popd
+
+pushd tarpc_server || exit /B 1
+call .\test.bat || exit /B 1
+popd
