@@ -15,3 +15,4 @@ wiggle = "20.0.0"
 promising-future = "0.2.4"
 os_pipe = "1.1.5"
 wasmtime-wasi-threads = "20.0.0"
+anyhow = { version = "1.0", default-features = false }

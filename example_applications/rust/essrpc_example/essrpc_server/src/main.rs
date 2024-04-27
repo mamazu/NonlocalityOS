@@ -44,7 +44,7 @@ fn main() {
     });
     while !is_done.load(std::sync::atomic::Ordering::SeqCst) {
         println!("Main thread waiting..");
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(1000));
     }
     println!("Main thread joining the background thread");
     background_acceptor.join();

@@ -1,4 +1,5 @@
 #![deny(warnings)]
+use anyhow::bail;
 use display_bytes::display_bytes;
 use normalize_path::NormalizePath;
 use os_pipe::{pipe, PipeReader, PipeWriter};
@@ -32,6 +33,13 @@ struct OutgoingInterfaceId(i32);
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 struct ServiceId(i32);
+
+// Some sources will tell you that #[derive(Display)] exists, but that is a lie.
+impl fmt::Display for ServiceId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 struct WasiProcess {
     web_assembly_file: RelativePathBuf,
@@ -391,10 +399,13 @@ fn run_wasi_process(
     let typed_entry_point = entry_point
         .typed::<(), ()>(&func_context_store)
         .expect("Tried to cast the main entry point function type");
-    typed_entry_point
-        .call(&mut func_context_store, ())
-        .expect("Tried to call the main entry point");
-    Ok(())
+    match typed_entry_point.call(&mut func_context_store, ()) {
+        Ok(_) => {
+            println!("Main function returned.");
+            Ok(())
+        }
+        Err(error) => bail!("Service {} failed: {}", this_service_id, error),
+    }
 }
 
 fn main() -> ExitCode {
@@ -483,6 +494,9 @@ fn main() -> ExitCode {
         for wasi_process in order.wasi_processes {
             let mut config = Config::new();
             config.wasm_threads(wasi_process.has_threads);
+            config.debug_info(true);
+            config.wasm_backtrace(true);
+            config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
             let engine = match Engine::new(&config) {
                 Ok(success) => success,
                 Err(error) => {

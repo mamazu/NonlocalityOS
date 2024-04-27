@@ -745,6 +745,7 @@ dependencies = [
 name = "management_service"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "display_bytes",
  "normalize-path",
  "os_pipe",
