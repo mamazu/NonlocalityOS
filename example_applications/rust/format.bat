@@ -1,5 +1,8 @@
 @echo off
-echo Formatting..
+
+pushd database || exit /B 1
+call .\format.bat || exit /B 1
+popd
 
 pushd essrpc_example || exit /B 1
 call .\format.bat || exit /B 1

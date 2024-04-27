@@ -447,15 +447,33 @@ fn main() -> ExitCode {
                 id:   ServiceId(4),
                 interfaces: BTreeMap::from([( OutgoingInterfaceId(0), (ServiceId(3), IncomingInterfaceId(0)))] ),
             },
-            /*WasiProcess {
+            WasiProcess {
+                web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/database/database_server/target/wasm32-wasip1-threads/debug/database_server.wasm",
+                )
+                .unwrap(),
+                has_threads: true,
+                id:   ServiceId(5),
+                interfaces: BTreeMap::new(),
+            },
+            WasiProcess {
+                web_assembly_file: RelativePathBuf::from_path(
+                    "example_applications/rust/database/database_client/target/wasm32-wasi/debug/database_client.wasm",
+                )
+                .unwrap(),
+                has_threads: false,
+                id:   ServiceId(6),
+                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), (ServiceId(5), IncomingInterfaceId(0)))] ),
+            },
+            WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
                     "example_applications/rust/idle_service/target/wasm32-wasi/debug/idle_service.wasm",
                 )
                 .unwrap(),
                 has_threads: false,
-                id: ServiceId(5),
+                id: ServiceId(7),
                 interfaces: BTreeMap::new(),
-            }*/
+            }
         ],
     };
 

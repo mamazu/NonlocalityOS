@@ -1,5 +1,4 @@
 @echo off
-echo Formatting..
 
 pushd essrpc_trait || exit /B 1
 cargo fmt || exit /B 1
