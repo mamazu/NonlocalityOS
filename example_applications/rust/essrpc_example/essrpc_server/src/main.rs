@@ -5,7 +5,6 @@ use essrpc::RPCServer;
 use essrpc_trait::Foo;
 use essrpc_trait::FooRPCServer;
 use nonlocality_env::accept;
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
 use std::sync::atomic::AtomicBool;
 
 struct FooImpl {}

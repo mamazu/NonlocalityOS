@@ -24,3 +24,15 @@ pub fn accept() -> Accepted {
 pub fn accept() -> Accepted {
     todo!();
 }
+
+#[cfg(any(unix, target_os = "wasi"))]
+pub fn connect(interface: i32) -> File {
+    let file_descriptor = unsafe { nonlocality_connect(interface) };
+    let stream = unsafe { File::from_raw_fd(file_descriptor) };
+    stream
+}
+
+#[cfg(target_os = "windows")]
+pub fn connect(_interface: i32) -> File {
+    todo!();
+}

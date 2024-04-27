@@ -492,35 +492,34 @@ fn main() -> ExitCode {
     thread::scope(|s| {
         let mut threads = Vec::new();
         for wasi_process in order.wasi_processes {
-            let mut config = Config::new();
-            config.wasm_threads(wasi_process.has_threads);
-            config.debug_info(true);
-            config.wasm_backtrace(true);
-            config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
-            let engine = match Engine::new(&config) {
-                Ok(success) => success,
-                Err(error) => {
-                    println!("Could not create wasmtime engine: {}.", error);
-                    continue;
-                }
-            };
             let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
-            let module = match Module::from_file(&engine, &input_program_path) {
-                Ok(module) => module,
-                Err(error) => {
-                    println!(
-                        "Could not load {}, error: {}.",
-                        input_program_path.display(),
-                        error
-                    );
-                    todo!()
-                }
-            };
             println!("Starting thread for {}.", input_program_path.display());
             let api_hub_2 = api_hub.clone();
             let this_service_id = wasi_process.id;
             let interfaces = Arc::new(wasi_process.interfaces.clone());
             let handler = s.spawn(move || {
+                let mut config = Config::new();
+                config.wasm_threads(wasi_process.has_threads);
+                config.debug_info(true);
+                config.wasm_backtrace(true);
+                config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
+                let engine = match Engine::new(&config) {
+                    Ok(success) => success,
+                    Err(error) => {
+                        panic!("Could not create wasmtime engine: {}.", error)
+                    }
+                };
+                let module = match Module::from_file(&engine, &input_program_path) {
+                    Ok(module) => module,
+                    Err(error) => {
+                        println!(
+                            "Could not load {}, error: {}.",
+                            input_program_path.display(),
+                            error
+                        );
+                        todo!()
+                    }
+                };
                 run_wasi_process(
                     engine,
                     module,
