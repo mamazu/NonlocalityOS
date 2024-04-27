@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 essrpc = {version = "0.4.1", features = ["bincode_transport", "async_client"]}
 nonlocality_env = { path ="../../../nonlocality_env" }
+essrpc_trait = { path ="../essrpc_trait" }

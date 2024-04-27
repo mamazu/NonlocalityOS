@@ -1,3 +1,4 @@
+#![deny(warnings)]
 use display_bytes::display_bytes;
 use normalize_path::NormalizePath;
 use os_pipe::{pipe, PipeReader, PipeWriter};

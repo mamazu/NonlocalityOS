@@ -1,6 +1,6 @@
 use std::fs::File;
 #[cfg(any(unix, target_os = "wasi"))]
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::FromRawFd;
 
 extern "C" {
     pub fn nonlocality_connect(interface: i32) -> i32;

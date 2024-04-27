@@ -104,6 +104,7 @@ name = "essrpc_client"
 version = "0.1.0"
 dependencies = [
  "essrpc",
+ "essrpc_trait",
  "nonlocality_env",
 ]
 
@@ -116,6 +117,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "essrpc_trait"
+version = "0.1.0"
+dependencies = [
+ "essrpc",
 ]
 
 [[package]]

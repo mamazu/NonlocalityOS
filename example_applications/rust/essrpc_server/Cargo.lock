@@ -115,7 +115,15 @@ name = "essrpc_server"
 version = "0.1.0"
 dependencies = [
  "essrpc",
+ "essrpc_trait",
  "nonlocality_env",
+]
+
+[[package]]
+name = "essrpc_trait"
+version = "0.1.0"
+dependencies = [
+ "essrpc",
 ]
 
 [[package]]

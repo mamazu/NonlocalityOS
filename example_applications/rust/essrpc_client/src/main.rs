@@ -1,14 +1,9 @@
-use essrpc::essrpc;
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCClient;
-use essrpc::RPCError;
+use essrpc_trait::Foo;
+use essrpc_trait::FooRPCClient;
 use nonlocality_env::nonlocality_connect;
 use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
-
-#[essrpc]
-pub trait Foo {
-    fn bar(&self, a: String, b: i32) -> Result<String, RPCError>;
-}
 
 fn main() {
     println!("Connecting to an API..");
