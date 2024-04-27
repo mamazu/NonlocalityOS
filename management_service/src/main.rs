@@ -58,7 +58,11 @@ struct Logger {
 
 impl std::io::Write for Logger {
     fn write(&mut self, buf: &[u8]) -> std::result::Result<usize, std::io::Error> {
-        println!("{}: {}", self.name, display_bytes(buf));
+        let displayed_part = match buf {
+            [head @ .., b'\n'] => head,
+            _ => buf,
+        };
+        println!("{}: {}", self.name, display_bytes(displayed_part));
         Ok(buf.len())
     }
 
