@@ -24,7 +24,10 @@ use wasmtime::{Caller, Engine, Linker, Module, Store};
 use wasmtime_wasi_threads::WasiThreadsCtx;
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-struct InterfaceId(i32);
+struct IncomingInterfaceId(i32);
+
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
+struct OutgoingInterfaceId(i32);
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 struct ServiceId(i32);
@@ -33,7 +36,7 @@ struct WasiProcess {
     web_assembly_file: RelativePathBuf,
     has_threads: bool,
     id: ServiceId,
-    interfaces: BTreeMap<InterfaceId, (ServiceId, InterfaceId)>,
+    interfaces: BTreeMap<OutgoingInterfaceId, (ServiceId, IncomingInterfaceId)>,
 }
 
 struct Order {
@@ -160,13 +163,13 @@ fn create_pair_of_streams(
 }
 
 struct AcceptResult {
-    interface: InterfaceId,
+    interface: IncomingInterfaceId,
     stream: InterServiceApiStream,
 }
 
 enum HubQueue {
     Accepting(Option<Promise<AcceptResult>>),
-    Connecting(VecDeque<(InterfaceId, Promise<InterServiceApiStream>)>),
+    Connecting(VecDeque<(IncomingInterfaceId, Promise<InterServiceApiStream>)>),
 }
 
 struct InterServiceApiHub {
@@ -217,7 +220,7 @@ impl InterServiceApiHub {
     pub fn connect(
         &self,
         destination_service: ServiceId,
-        interface: InterfaceId,
+        interface: IncomingInterfaceId,
     ) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
         let mut locked = self.queue.lock().unwrap();
         let queue = locked
@@ -256,7 +259,8 @@ struct InterServiceFuncContext {
     // Somehow it's impossible to reference local variables from wasmtime host functions, so we have to use reference counting for no real reason.
     api_hub: Arc<InterServiceApiHub>,
     this_service_id: ServiceId,
-    outgoing_interfaces: Arc<std::collections::BTreeMap<InterfaceId, (ServiceId, InterfaceId)>>,
+    outgoing_interfaces:
+        Arc<std::collections::BTreeMap<OutgoingInterfaceId, (ServiceId, IncomingInterfaceId)>>,
 }
 
 // Absolutely ridiculous hack necessary because it is impossible to return multiple values,
@@ -272,7 +276,9 @@ fn run_wasi_process(
     api_hub: Arc<InterServiceApiHub>,
     has_threads: bool,
     this_service_id: ServiceId,
-    outgoing_interfaces: Arc<std::collections::BTreeMap<InterfaceId, (ServiceId, InterfaceId)>>,
+    outgoing_interfaces: Arc<
+        std::collections::BTreeMap<OutgoingInterfaceId, (ServiceId, IncomingInterfaceId)>,
+    >,
 ) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s: &mut InterServiceFuncContext| &mut s.wasi)?;
@@ -317,14 +323,16 @@ fn run_wasi_process(
                     interface
                 );
                 let context = caller.data();
-                let outgoing_interface =
-                    match context.outgoing_interfaces.get(&InterfaceId(interface)) {
-                        Some(found) => found,
-                        None => todo!(),
-                    };
+                let connecting_interface = match context
+                    .outgoing_interfaces
+                    .get(&OutgoingInterfaceId(interface))
+                {
+                    Some(found) => found,
+                    None => todo!(),
+                };
                 let stream = match context
                     .api_hub
-                    .connect(outgoing_interface.0, outgoing_interface.1)
+                    .connect(connecting_interface.0, connecting_interface.1)
                 {
                     Ok(stream) => stream,
                     Err(error) => {
@@ -418,7 +426,7 @@ fn main() -> ExitCode {
                 .unwrap(),
                 has_threads: false,
                 id:   ServiceId(2),
-                interfaces: BTreeMap::from([( InterfaceId(0), (ServiceId(1), InterfaceId(0)))] ),
+                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), (ServiceId(1), IncomingInterfaceId(0)))] ),
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
@@ -436,7 +444,7 @@ fn main() -> ExitCode {
                 .unwrap(),
                 has_threads: false,
                 id:   ServiceId(4),
-                interfaces: BTreeMap::from([( InterfaceId(0), (ServiceId(3), InterfaceId(0)))] ),
+                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), (ServiceId(3), IncomingInterfaceId(0)))] ),
             },
             /*WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
