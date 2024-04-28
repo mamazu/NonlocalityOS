@@ -466,6 +466,7 @@ async fn install_tools(
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::process::ExitCode {
+    let started_at = std::time::Instant::now();
     let command_line_arguments: Vec<String> = std::env::args().collect();
     if command_line_arguments.len() != 2 {
         println!("One command line argument required: Path to the root of the repository.");
@@ -579,6 +580,10 @@ async fn main() -> std::process::ExitCode {
     };
 
     error_count += build_and_test_recursively(&root, &repository).await;
+
+    let build_duration = started_at.elapsed();
+    println!("Build duration: {:?}", build_duration);
+
     match error_count.0 {
         0 => std::process::ExitCode::SUCCESS,
         _ => {
