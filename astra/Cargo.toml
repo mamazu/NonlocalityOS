@@ -8,3 +8,7 @@ edition = "2021"
 [dependencies]
 tokio = {version = "1.37.0", features = ["rt-multi-thread", "macros", "process"]}
 async-recursion = "1.1.1"
+curl = "0.4.46"
+xz2 = "0.1.7"
+tar = "0.4.40"
+flate2 = "1.0"

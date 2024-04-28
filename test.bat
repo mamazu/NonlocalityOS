@@ -5,24 +5,13 @@ call .\astra.bat || exit /B 1
 setlocal
 set repository=%CD%
 
-pushd downloader || exit /B 1
-
-rem found this compiler on https://developer.arm.com/downloads/-/gnu-a
 set rpi_compiler_name=gcc-arm-10.3-2021.07-mingw-w64-i686-aarch64-none-linux-gnu
-set rpi_compiler_download_url=https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/%rpi_compiler_name%.tar.xz?rev=06b6c36e428c48fda4b6d907f17308be^&hash=B36CC5C9544DCFCB2DB06FB46C8B8262
-set rpi_compiler_archive_path=%repository%\tools\%rpi_compiler_name%.tar.xz
 set rpi_compiler_unpack_dir=%repository%\tools\raspberry_pi_compiler
-cargo run --release "%rpi_compiler_download_url%" "%rpi_compiler_archive_path%" "%rpi_compiler_unpack_dir%" "tar.xz" || exit /B 1
 
 set wasi_compiler_name=wasi-sdk-22
-set wasi_compiler_download_url=https://github.com/WebAssembly/wasi-sdk/releases/download/%wasi_compiler_name%/%wasi_compiler_name%.0.m-mingw.tar.gz
-set wasi_compiler_archive_path=%repository%\tools\%wasi_compiler_name%.0.m-mingw.tar.gz
 set wasi_compiler_unpack_dir=%repository%\tools\%wasi_compiler_name%.0.m-mingw
-cargo run --release "%wasi_compiler_download_url%" "%wasi_compiler_archive_path%" "%wasi_compiler_unpack_dir%" "tar.gz" || exit /B 1
 set CC_wasm32-wasi=%wasi_compiler_unpack_dir%\%wasi_compiler_name%.0+m\bin\clang.exe
 set CC_wasm32-wasip1-threads=%CC_wasm32-wasi%
-
-popd
 
 pushd astra || exit /B 1
 cargo test || exit /B 1

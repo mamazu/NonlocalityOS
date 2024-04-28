@@ -1,6 +1,7 @@
 #![deny(warnings)]
 use async_recursion::async_recursion;
 use std::collections::BTreeMap;
+pub mod downloads;
 
 #[derive(Clone)]
 struct Program {}
@@ -103,6 +104,54 @@ async fn build_and_test_recursively(
     error_count
 }
 
+async fn install_raspberry_pi_cpp_compiler(tools_directory: &std::path::Path) -> NumberOfErrors {
+    // found this compiler on https://developer.arm.com/downloads/-/gnu-a
+    let compiler_name = "gcc-arm-10.3-2021.07-mingw-w64-i686-aarch64-none-linux-gnu";
+    let archive_file_name = format!("{}.tar.xz", compiler_name);
+    let download_url = format!("https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/{}?rev=06b6c36e428c48fda4b6d907f17308be^&hash=B36CC5C9544DCFCB2DB06FB46C8B8262", &archive_file_name);
+    let unpacked_directory = tools_directory.join("raspberry_pi_compiler");
+    match downloads::install_from_downloaded_archive(
+        &download_url,
+        &tools_directory.join(&archive_file_name),
+        &unpacked_directory,
+        "tar.xz",
+    ) {
+        Ok(_) => NumberOfErrors(0),
+        Err(error) => {
+            println!("Could not download and unpack {}: {}", &download_url, error);
+            NumberOfErrors(1)
+        }
+    }
+}
+
+async fn install_wasi_cpp_compiler(tools_directory: &std::path::Path) -> NumberOfErrors {
+    let compiler_name = "wasi-sdk-22";
+    let archive_file_name = format!("{}.0.m-mingw.tar.gz", compiler_name);
+    let download_url = format!(
+        "https://github.com/WebAssembly/wasi-sdk/releases/download/{}/{}",
+        &compiler_name, &archive_file_name
+    );
+    let unpacked_directory = tools_directory.join(format!("{}.0.m-mingw", compiler_name));
+    match downloads::install_from_downloaded_archive(
+        &download_url,
+        &tools_directory.join(&archive_file_name),
+        &unpacked_directory,
+        "tar.gz",
+    ) {
+        Ok(_) => NumberOfErrors(0),
+        Err(error) => {
+            println!("Could not download and unpack {}: {}", &download_url, error);
+            NumberOfErrors(1)
+        }
+    }
+}
+
+async fn install_tools(repository: &std::path::Path) -> NumberOfErrors {
+    let tools_directory = repository.join("tools");
+    install_raspberry_pi_cpp_compiler(&tools_directory).await
+        + install_wasi_cpp_compiler(&tools_directory).await
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::process::ExitCode {
     let command_line_arguments: Vec<String> = std::env::args().collect();
@@ -115,10 +164,6 @@ async fn main() -> std::process::ExitCode {
     let root = Directory {
         entries: BTreeMap::from([
             ("astra".to_string(), DirectoryEntry::Program(Program {})),
-            (
-                "downloader".to_string(),
-                DirectoryEntry::Program(Program {}),
-            ),
             (
                 "example_applications".to_string(),
                 DirectoryEntry::Directory(Directory {
@@ -197,7 +242,8 @@ async fn main() -> std::process::ExitCode {
         ]),
     };
 
-    let error_count = build_and_test_recursively(&root, &repository).await;
+    let mut error_count = install_tools(repository).await;
+    error_count += build_and_test_recursively(&root, &repository).await;
     match error_count.0 {
         0 => std::process::ExitCode::SUCCESS,
         _ => {

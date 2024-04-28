@@ -1,6 +1,5 @@
 use curl::easy::Easy;
 use flate2::read::GzDecoder;
-use std::env;
 use std::fs;
 use std::fs::File;
 use std::io;
@@ -78,19 +77,15 @@ fn unpack(
     Ok(())
 }
 
-fn main() -> Result<(), std::io::Error> {
-    let args: Vec<String> = env::args().collect();
-    let download_url = &args[1];
-    let download_file_path = Path::new(&args[2]);
-    let unpack_destination_directory = Path::new(&args[3]);
-    let archive_type = &args[4];
-
+pub fn install_from_downloaded_archive(
+    download_url: &str,
+    download_file_path: &Path,
+    unpack_destination_directory: &Path,
+    archive_type: &str,
+) -> Result<(), std::io::Error> {
     if let Ok(metadata) = fs::metadata(unpack_destination_directory) {
         if metadata.is_dir() {
-            println!(
-                "Directory '{}' already exists.",
-                unpack_destination_directory.display()
-            );
+            // assume that nothing is to be done if this directory exists
             return Ok(());
         } else {
             panic!(
@@ -119,7 +114,7 @@ fn main() -> Result<(), std::io::Error> {
         download(&download_url, download_file_path)?;
     }
 
-    match archive_type.as_str() {
+    match archive_type {
         "tar.xz" => unpack(download_file_path, unpack_destination_directory, |input| {
             Ok(Box::new(XzDecoder::new_multi_decoder(input)))
         })?,
