@@ -1,4 +1,3 @@
-@echo off
 cls || exit /B 1
 call .\astra.bat || exit /B 1
 
@@ -13,20 +12,7 @@ set wasi_compiler_unpack_dir=%repository%\tools\%wasi_compiler_name%.0.m-mingw
 set CC_wasm32-wasi=%wasi_compiler_unpack_dir%\%wasi_compiler_name%.0+m\bin\clang.exe
 set CC_wasm32-wasip1-threads=%CC_wasm32-wasi%
 
-pushd astra || exit /B 1
-cargo test || exit /B 1
-popd
-
-pushd management_interface || exit /B 1
-cargo test || exit /B 1
-popd
-
-pushd admin_tool || exit /B 1
-cargo test || exit /B 1
-popd
-
 pushd management_service || exit /B 1
-cargo test || exit /B 1
 
 rem build for the Raspberry Pi because compiling stuff on the device itself is very slow
 
@@ -44,10 +30,6 @@ rustup toolchain install nightly-x86_64-pc-windows-msvc || exit /B 1
 rustup target add wasm32-wasi || exit /B 1
 rustup target add wasm32-wasip1-threads --toolchain nightly || exit /B 1
 
-call .\test.bat || exit /B 1
-popd
-
-pushd nonlocality_env || exit /B 1
 call .\test.bat || exit /B 1
 popd
 

@@ -1,4 +1,4 @@
-@echo off
+
 
 pushd database || exit /B 1
 call .\format.bat || exit /B 1

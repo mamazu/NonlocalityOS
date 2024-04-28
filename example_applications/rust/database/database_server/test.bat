@@ -1,7 +1,5 @@
-@echo off
-setlocal
-cargo test || exit /B 1
 
+setlocal
 rem With default compiler options, wasmtime fails to run an application using SQLite:
 rem "unknown import: `env::__extenddftf2` has not been defined"
 rem This has something to do with long double (?).

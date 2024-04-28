@@ -36,13 +36,11 @@ impl std::ops::AddAssign for NumberOfErrors {
     }
 }
 
-async fn build_and_test_program(
-    _program: &Program,
-    where_in_filesystem: &std::path::Path,
-) -> NumberOfErrors {
-    let maybe_output = tokio::process::Command::new("cargo")
-        .args(&["fmt"])
-        .current_dir(&where_in_filesystem)
+async fn run_cargo(project: &std::path::Path, arguments: &[&str]) -> NumberOfErrors {
+    let cargo_exe = "cargo";
+    let maybe_output = tokio::process::Command::new(cargo_exe)
+        .args(arguments)
+        .current_dir(&project)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -57,12 +55,11 @@ async fn build_and_test_program(
         }
     };
     if output.status.success() {
-        println!("Formatted: {}", where_in_filesystem.display());
         return NumberOfErrors(0);
     }
     println!(
-        "cargo fmt in {} failed with exit status {}.",
-        where_in_filesystem.display(),
+        "cargo failed in {} with exit status {}.",
+        project.display(),
         output.status
     );
     println!("Standard output:");
@@ -72,6 +69,21 @@ async fn build_and_test_program(
     let stderr = String::from_utf8_lossy(&output.stderr);
     println!("{}", &stderr);
     NumberOfErrors(1)
+}
+
+async fn run_cargo_fmt(project: &std::path::Path) -> NumberOfErrors {
+    run_cargo(&project, &["fmt"]).await
+}
+
+async fn run_cargo_test(project: &std::path::Path) -> NumberOfErrors {
+    run_cargo(&project, &["test"]).await
+}
+
+async fn build_and_test_program(
+    _program: &Program,
+    where_in_filesystem: &std::path::Path,
+) -> NumberOfErrors {
+    run_cargo_fmt(&where_in_filesystem).await + run_cargo_test(&where_in_filesystem).await
 }
 
 #[async_recursion]
