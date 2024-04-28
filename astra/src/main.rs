@@ -337,24 +337,36 @@ async fn install_wasi_cpp_compiler(tools_directory: &std::path::Path) -> NumberO
     }
 }
 
-async fn install_rust_toolchain(
+const RUSTUP_EXECUTABLE: &str = "rustup";
+
+async fn install_rust_target(
     working_directory: &std::path::Path,
     target_name: &str,
     channel: &str,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
         working_directory,
-        std::path::Path::new("rustup"),
+        std::path::Path::new(RUSTUP_EXECUTABLE),
         &["target", "add", &target_name, "--toolchain", &channel],
         &HashMap::new(),
     )
     .await
 }
 
-async fn install_rust_toolchains(working_directory: &std::path::Path) -> NumberOfErrors {
-    install_rust_toolchain(working_directory, RASPBERRY_PI_TARGET_NAME, "stable").await
-        + install_rust_toolchain(working_directory, "wasm32-wasi", "stable").await
-        + install_rust_toolchain(working_directory, "wasm32-wasip1-threads", "nightly").await
+async fn install_rust_targets(working_directory: &std::path::Path) -> NumberOfErrors {
+    install_rust_target(working_directory, RASPBERRY_PI_TARGET_NAME, "stable").await
+        + install_rust_target(working_directory, "wasm32-wasi", "stable").await
+        + install_rust_target(working_directory, "wasm32-wasip1-threads", "nightly").await
+}
+
+async fn install_rust_toolchain(working_directory: &std::path::Path) -> NumberOfErrors {
+    run_process_with_error_only_output(
+        working_directory,
+        std::path::Path::new(RUSTUP_EXECUTABLE),
+        &["toolchain", "install", "nightly-x86_64-pc-windows-msvc"],
+        &HashMap::new(),
+    )
+    .await
 }
 
 async fn install_tools(
@@ -365,7 +377,8 @@ async fn install_tools(
     (
         error_count
             + install_wasi_cpp_compiler(&tools_directory).await
-            + install_rust_toolchains(&repository).await,
+            + install_rust_targets(&repository).await
+            + install_rust_toolchain(&repository).await,
         raspberry_pi,
     )
 }
