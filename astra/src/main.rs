@@ -4,7 +4,23 @@ use std::collections::BTreeMap;
 pub mod downloads;
 
 #[derive(Clone)]
-struct Program {}
+struct Program {
+    pub is_built_for_host: bool,
+}
+
+impl Program {
+    pub fn host() -> Program {
+        Program {
+            is_built_for_host: true,
+        }
+    }
+
+    pub fn other() -> Program {
+        Program {
+            is_built_for_host: false,
+        }
+    }
+}
 
 #[derive(Clone)]
 enum DirectoryEntry {
@@ -88,11 +104,21 @@ async fn run_cargo_test(project: &std::path::Path) -> NumberOfErrors {
     run_cargo(&project, &["test"]).await
 }
 
+async fn run_cargo_build(project: &std::path::Path) -> NumberOfErrors {
+    run_cargo(&project, &["build"]).await
+}
+
 async fn build_and_test_program(
-    _program: &Program,
+    program: &Program,
     where_in_filesystem: &std::path::Path,
 ) -> NumberOfErrors {
-    run_cargo_fmt(&where_in_filesystem).await + run_cargo_test(&where_in_filesystem).await
+    run_cargo_fmt(&where_in_filesystem).await
+        + run_cargo_test(&where_in_filesystem).await
+        + if program.is_built_for_host {
+            run_cargo_build(where_in_filesystem).await
+        } else {
+            NumberOfErrors(0)
+        }
 }
 
 #[async_recursion]
@@ -204,7 +230,14 @@ async fn main() -> std::process::ExitCode {
 
     let root = Directory {
         entries: BTreeMap::from([
-            ("astra".to_string(), DirectoryEntry::Program(Program {})),
+            (
+                "admin_tool".to_string(),
+                DirectoryEntry::Program(Program::host()),
+            ),
+            (
+                "astra".to_string(),
+                DirectoryEntry::Program(Program::other()),
+            ),
             (
                 "example_applications".to_string(),
                 DirectoryEntry::Directory(Directory {
@@ -212,22 +245,25 @@ async fn main() -> std::process::ExitCode {
                         "rust".to_string(),
                         DirectoryEntry::Directory(Directory {
                             entries: BTreeMap::from([
-                                ("call_api".to_string(), DirectoryEntry::Program(Program {})),
+                                (
+                                    "call_api".to_string(),
+                                    DirectoryEntry::Program(Program::other()),
+                                ),
                                 (
                                     "database".to_string(),
                                     DirectoryEntry::Directory(Directory {
                                         entries: BTreeMap::from([
                                             (
                                                 "database_client".to_string(),
-                                                DirectoryEntry::Program(Program {}),
+                                                DirectoryEntry::Program(Program::other()),
                                             ),
                                             (
                                                 "database_server".to_string(),
-                                                DirectoryEntry::Program(Program {}),
+                                                DirectoryEntry::Program(Program::other()),
                                             ),
                                             (
                                                 "database_trait".to_string(),
-                                                DirectoryEntry::Program(Program {}),
+                                                DirectoryEntry::Program(Program::other()),
                                             ),
                                         ]),
                                     }),
@@ -238,30 +274,30 @@ async fn main() -> std::process::ExitCode {
                                         entries: BTreeMap::from([
                                             (
                                                 "essrpc_client".to_string(),
-                                                DirectoryEntry::Program(Program {}),
+                                                DirectoryEntry::Program(Program::other()),
                                             ),
                                             (
                                                 "essrpc_server".to_string(),
-                                                DirectoryEntry::Program(Program {}),
+                                                DirectoryEntry::Program(Program::other()),
                                             ),
                                             (
                                                 "essrpc_trait".to_string(),
-                                                DirectoryEntry::Program(Program {}),
+                                                DirectoryEntry::Program(Program::other()),
                                             ),
                                         ]),
                                     }),
                                 ),
                                 (
                                     "hello_rust".to_string(),
-                                    DirectoryEntry::Program(Program {}),
+                                    DirectoryEntry::Program(Program::other()),
                                 ),
                                 (
                                     "idle_service".to_string(),
-                                    DirectoryEntry::Program(Program {}),
+                                    DirectoryEntry::Program(Program::other()),
                                 ),
                                 (
                                     "provide_api".to_string(),
-                                    DirectoryEntry::Program(Program {}),
+                                    DirectoryEntry::Program(Program::other()),
                                 ),
                             ]),
                         }),
@@ -270,15 +306,15 @@ async fn main() -> std::process::ExitCode {
             ),
             (
                 "management_interface".to_string(),
-                DirectoryEntry::Program(Program {}),
+                DirectoryEntry::Program(Program::other()),
             ),
             (
                 "management_service".to_string(),
-                DirectoryEntry::Program(Program {}),
+                DirectoryEntry::Program(Program::host()),
             ),
             (
                 "nonlocality_env".to_string(),
-                DirectoryEntry::Program(Program {}),
+                DirectoryEntry::Program(Program::other()),
             ),
         ]),
     };

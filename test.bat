@@ -19,7 +19,6 @@ set LD_LIBRARY_PATH=%rpi_compiler_unpack_dir%\%rpi_compiler_name%\aarch64-none-l
 
 pushd management_service || exit /B 1
 cargo build --target %raspberry_pi_target% --config target.aarch64-unknown-linux-gnu.linker='%CC_aarch64-unknown-linux-gnu%' --release || exit /B 1
-call .\test.bat || exit /B 1
 popd
 
 rustup toolchain install nightly-x86_64-pc-windows-msvc || exit /B 1
