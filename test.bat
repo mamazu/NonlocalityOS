@@ -24,6 +24,10 @@ set CC_wasm32-wasip1-threads=%CC_wasm32-wasi%
 
 popd
 
+set CARGO_INCREMENTAL=0
+set RUSTFLAGS=-Cinstrument-coverage
+set LLVM_PROFILE_FILE=%repository%\coverage\cargo-test-%%p-%%m.profraw
+
 pushd management_interface || exit /B 1
 cargo test || exit /B 1
 popd
@@ -61,3 +65,4 @@ call .\test.bat || exit /B 1
 popd
 
 echo Success!
+endlocal
