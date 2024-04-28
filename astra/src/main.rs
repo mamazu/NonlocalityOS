@@ -36,11 +36,14 @@ impl std::ops::AddAssign for NumberOfErrors {
     }
 }
 
-async fn run_cargo(project: &std::path::Path, arguments: &[&str]) -> NumberOfErrors {
-    let cargo_exe = "cargo";
-    let maybe_output = tokio::process::Command::new(cargo_exe)
+async fn run_process_with_error_only_output(
+    working_directory: &std::path::Path,
+    executable: &std::path::Path,
+    arguments: &[&str],
+) -> NumberOfErrors {
+    let maybe_output = tokio::process::Command::new(executable)
         .args(arguments)
-        .current_dir(&project)
+        .current_dir(&working_directory)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -50,18 +53,20 @@ async fn run_cargo(project: &std::path::Path, arguments: &[&str]) -> NumberOfErr
     let output = match maybe_output {
         Ok(output) => output,
         Err(error) => {
-            println!("Failed to spawn cargo process: {}.", error);
+            println!(
+                "Failed to spawn {} process: {}.",
+                executable.display(),
+                error
+            );
             return NumberOfErrors(1);
         }
     };
     if output.status.success() {
         return NumberOfErrors(0);
     }
-    println!(
-        "cargo failed in {} with exit status {}.",
-        project.display(),
-        output.status
-    );
+    println!("Executable: {}", executable.display());
+    println!("Working directory: {}", working_directory.display());
+    println!("Exit status: {}", output.status);
     println!("Standard output:");
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("{}", &stdout);
@@ -69,6 +74,10 @@ async fn run_cargo(project: &std::path::Path, arguments: &[&str]) -> NumberOfErr
     let stderr = String::from_utf8_lossy(&output.stderr);
     println!("{}", &stderr);
     NumberOfErrors(1)
+}
+
+async fn run_cargo(project: &std::path::Path, arguments: &[&str]) -> NumberOfErrors {
+    run_process_with_error_only_output(&project, std::path::Path::new("cargo"), &arguments).await
 }
 
 async fn run_cargo_fmt(project: &std::path::Path) -> NumberOfErrors {
@@ -158,10 +167,30 @@ async fn install_wasi_cpp_compiler(tools_directory: &std::path::Path) -> NumberO
     }
 }
 
+async fn install_rust_toolchain(
+    working_directory: &std::path::Path,
+    target_name: &str,
+    channel: &str,
+) -> NumberOfErrors {
+    run_process_with_error_only_output(
+        working_directory,
+        std::path::Path::new("rustup"),
+        &["target", "add", &target_name, "--toolchain", &channel],
+    )
+    .await
+}
+
+async fn install_rust_toolchains(working_directory: &std::path::Path) -> NumberOfErrors {
+    install_rust_toolchain(working_directory, "aarch64-unknown-linux-gnu", "stable").await
+        + install_rust_toolchain(working_directory, "wasm32-wasi", "stable").await
+        + install_rust_toolchain(working_directory, "wasm32-wasip1-threads", "nightly").await
+}
+
 async fn install_tools(repository: &std::path::Path) -> NumberOfErrors {
     let tools_directory = repository.join("tools");
     install_raspberry_pi_cpp_compiler(&tools_directory).await
         + install_wasi_cpp_compiler(&tools_directory).await
+        + install_rust_toolchains(&repository).await
 }
 
 #[tokio::main(flavor = "multi_thread")]
