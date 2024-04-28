@@ -1,24 +1,39 @@
 #![deny(warnings)]
 use async_recursion::async_recursion;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 pub mod downloads;
 
 #[derive(Clone)]
+struct RaspberryPi64Target {
+    compiler_installation: std::path::PathBuf,
+}
+
+#[derive(Clone)]
+enum CargoBuildTarget {
+    Host,
+    RaspberryPi64(RaspberryPi64Target),
+}
+
+#[derive(Clone)]
 struct Program {
-    pub is_built_for_host: bool,
+    pub targets: Vec<CargoBuildTarget>,
 }
 
 impl Program {
     pub fn host() -> Program {
         Program {
-            is_built_for_host: true,
+            targets: vec![CargoBuildTarget::Host],
+        }
+    }
+
+    pub fn host_and_pi(pi: RaspberryPi64Target) -> Program {
+        Program {
+            targets: vec![CargoBuildTarget::Host, CargoBuildTarget::RaspberryPi64(pi)],
         }
     }
 
     pub fn other() -> Program {
-        Program {
-            is_built_for_host: false,
-        }
+        Program { targets: vec![] }
     }
 }
 
@@ -56,10 +71,12 @@ async fn run_process_with_error_only_output(
     working_directory: &std::path::Path,
     executable: &std::path::Path,
     arguments: &[&str],
+    environment_variables: &HashMap<String, String>,
 ) -> NumberOfErrors {
     let maybe_output = tokio::process::Command::new(executable)
         .args(arguments)
         .current_dir(&working_directory)
+        .envs(environment_variables)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -81,6 +98,8 @@ async fn run_process_with_error_only_output(
         return NumberOfErrors(0);
     }
     println!("Executable: {}", executable.display());
+    println!("Arguments: {}", arguments.join(" "));
+    println!("Environment: {:?}", &environment_variables);
     println!("Working directory: {}", working_directory.display());
     println!("Exit status: {}", output.status);
     println!("Standard output:");
@@ -92,20 +111,142 @@ async fn run_process_with_error_only_output(
     NumberOfErrors(1)
 }
 
-async fn run_cargo(project: &std::path::Path, arguments: &[&str]) -> NumberOfErrors {
-    run_process_with_error_only_output(&project, std::path::Path::new("cargo"), &arguments).await
+async fn run_cargo(
+    project: &std::path::Path,
+    arguments: &[&str],
+    environment_variables: &HashMap<String, String>,
+) -> NumberOfErrors {
+    run_process_with_error_only_output(
+        &project,
+        std::path::Path::new("cargo"),
+        &arguments,
+        &environment_variables,
+    )
+    .await
 }
 
 async fn run_cargo_fmt(project: &std::path::Path) -> NumberOfErrors {
-    run_cargo(&project, &["fmt"]).await
+    run_cargo(&project, &["fmt"], &HashMap::new()).await
 }
 
 async fn run_cargo_test(project: &std::path::Path) -> NumberOfErrors {
-    run_cargo(&project, &["test"]).await
+    run_cargo(&project, &["test"], &HashMap::new()).await
 }
 
-async fn run_cargo_build(project: &std::path::Path) -> NumberOfErrors {
-    run_cargo(&project, &["build"]).await
+const RASPBERRY_PI_TARGET_NAME: &str = "aarch64-unknown-linux-gnu";
+
+fn confirm_regular_file(path: &std::path::Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(info) => {
+            if info.is_file() {
+                true
+            } else {
+                println!(
+                    "Expected file at {}, but found something else.",
+                    path.display()
+                );
+                false
+            }
+        }
+        Err(error) => {
+            println!(
+                "Expected file at {}, but got an error: {}",
+                path.display(),
+                error
+            );
+            false
+        }
+    }
+}
+
+fn confirm_directory(path: &std::path::Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(info) => {
+            if info.is_dir() {
+                true
+            } else {
+                println!(
+                    "Expected directory at {}, but found something else.",
+                    path.display()
+                );
+                false
+            }
+        }
+        Err(error) => {
+            println!(
+                "Expected directory at {}, but got an error: {}",
+                path.display(),
+                error
+            );
+            false
+        }
+    }
+}
+
+async fn run_cargo_build_for_raspberry_pi(
+    project: &std::path::Path,
+    compiler_installation: &std::path::Path,
+) -> NumberOfErrors {
+    let target_name = RASPBERRY_PI_TARGET_NAME;
+    let bin = compiler_installation.join("bin");
+    let ar = bin.join("aarch64-none-linux-gnu-ar.exe");
+    if !confirm_regular_file(&ar) {
+        return NumberOfErrors(1);
+    }
+    let ar_str = ar.to_str().expect("Tried to convert path to string");
+    let compiler = bin.join("aarch64-none-linux-gnu-gcc.exe");
+    if !confirm_regular_file(&compiler) {
+        return NumberOfErrors(1);
+    }
+    let compiler_str = compiler.to_str().expect("Tried to convert path to string");
+    let library_path = compiler_installation
+        .join("aarch64-none-linux-gnu")
+        .join("libc")
+        .join("lib64");
+    if !confirm_directory(&library_path) {
+        return NumberOfErrors(1);
+    }
+    let library_path_str = library_path
+        .to_str()
+        .expect("Tried to convert path to string");
+    let environment_variables = HashMap::from([
+        (format!("CC_{}", target_name), compiler_str.to_string()),
+        (format!("AR_{}", target_name), ar_str.to_string()),
+        ("LD_LIBRARY_PATH".to_string(), library_path_str.to_string()),
+    ]);
+    run_cargo(
+        &project,
+        &[
+            "build",
+            "--target",
+            target_name,
+            "--config",
+            &format!("target.{}.linker='{}'", target_name, compiler_str),
+            "--release",
+        ],
+        &environment_variables,
+    )
+    .await
+}
+
+async fn run_cargo_build(project: &std::path::Path, target: &CargoBuildTarget) -> NumberOfErrors {
+    match target {
+        CargoBuildTarget::Host => run_cargo(&project, &["build"], &HashMap::new()).await,
+        CargoBuildTarget::RaspberryPi64(pi) => {
+            run_cargo_build_for_raspberry_pi(&project, &pi.compiler_installation).await
+        }
+    }
+}
+
+async fn build_relevant_targets(
+    program: &Program,
+    where_in_filesystem: &std::path::Path,
+) -> NumberOfErrors {
+    let mut error_count = NumberOfErrors(0);
+    for target in &program.targets {
+        error_count += run_cargo_build(&where_in_filesystem, &target).await
+    }
+    error_count
 }
 
 async fn build_and_test_program(
@@ -114,11 +255,7 @@ async fn build_and_test_program(
 ) -> NumberOfErrors {
     run_cargo_fmt(&where_in_filesystem).await
         + run_cargo_test(&where_in_filesystem).await
-        + if program.is_built_for_host {
-            run_cargo_build(where_in_filesystem).await
-        } else {
-            NumberOfErrors(0)
-        }
+        + build_relevant_targets(program, where_in_filesystem).await
 }
 
 #[async_recursion]
@@ -151,7 +288,9 @@ async fn build_and_test_recursively(
     error_count
 }
 
-async fn install_raspberry_pi_cpp_compiler(tools_directory: &std::path::Path) -> NumberOfErrors {
+async fn install_raspberry_pi_cpp_compiler(
+    tools_directory: &std::path::Path,
+) -> (NumberOfErrors, Option<RaspberryPi64Target>) {
     // found this compiler on https://developer.arm.com/downloads/-/gnu-a
     let compiler_name = "gcc-arm-10.3-2021.07-mingw-w64-i686-aarch64-none-linux-gnu";
     let archive_file_name = format!("{}.tar.xz", compiler_name);
@@ -163,10 +302,15 @@ async fn install_raspberry_pi_cpp_compiler(tools_directory: &std::path::Path) ->
         &unpacked_directory,
         downloads::Compression::Xz,
     ) {
-        Ok(_) => NumberOfErrors(0),
+        Ok(_) => (
+            NumberOfErrors(0),
+            Some(RaspberryPi64Target {
+                compiler_installation: unpacked_directory.join(compiler_name),
+            }),
+        ),
         Err(error) => {
             println!("Could not download and unpack {}: {}", &download_url, error);
-            NumberOfErrors(1)
+            (NumberOfErrors(1), None)
         }
     }
 }
@@ -202,21 +346,28 @@ async fn install_rust_toolchain(
         working_directory,
         std::path::Path::new("rustup"),
         &["target", "add", &target_name, "--toolchain", &channel],
+        &HashMap::new(),
     )
     .await
 }
 
 async fn install_rust_toolchains(working_directory: &std::path::Path) -> NumberOfErrors {
-    install_rust_toolchain(working_directory, "aarch64-unknown-linux-gnu", "stable").await
+    install_rust_toolchain(working_directory, RASPBERRY_PI_TARGET_NAME, "stable").await
         + install_rust_toolchain(working_directory, "wasm32-wasi", "stable").await
         + install_rust_toolchain(working_directory, "wasm32-wasip1-threads", "nightly").await
 }
 
-async fn install_tools(repository: &std::path::Path) -> NumberOfErrors {
+async fn install_tools(
+    repository: &std::path::Path,
+) -> (NumberOfErrors, Option<RaspberryPi64Target>) {
     let tools_directory = repository.join("tools");
-    install_raspberry_pi_cpp_compiler(&tools_directory).await
-        + install_wasi_cpp_compiler(&tools_directory).await
-        + install_rust_toolchains(&repository).await
+    let (error_count, raspberry_pi) = install_raspberry_pi_cpp_compiler(&tools_directory).await;
+    (
+        error_count
+            + install_wasi_cpp_compiler(&tools_directory).await
+            + install_rust_toolchains(&repository).await,
+        raspberry_pi,
+    )
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -227,6 +378,7 @@ async fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     let repository = std::path::Path::new(&command_line_arguments[1]);
+    let (mut error_count, maybe_raspberry_pi) = install_tools(repository).await;
 
     let root = Directory {
         entries: BTreeMap::from([
@@ -310,7 +462,10 @@ async fn main() -> std::process::ExitCode {
             ),
             (
                 "management_service".to_string(),
-                DirectoryEntry::Program(Program::host()),
+                DirectoryEntry::Program(match maybe_raspberry_pi {
+                    Some(raspberry_pi) => Program::host_and_pi(raspberry_pi),
+                    None => Program::host(),
+                }),
             ),
             (
                 "nonlocality_env".to_string(),
@@ -319,7 +474,6 @@ async fn main() -> std::process::ExitCode {
         ]),
     };
 
-    let mut error_count = install_tools(repository).await;
     error_count += build_and_test_recursively(&root, &repository).await;
     match error_count.0 {
         0 => std::process::ExitCode::SUCCESS,
