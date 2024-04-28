@@ -9,9 +9,16 @@ struct RaspberryPi64Target {
 }
 
 #[derive(Clone)]
+struct WasiThreadsTarget {
+    wasi_sdk: std::path::PathBuf,
+}
+
+#[derive(Clone)]
 enum CargoBuildTarget {
     Host,
     RaspberryPi64(RaspberryPi64Target),
+    Wasi,
+    WasiThreads(WasiThreadsTarget),
 }
 
 #[derive(Clone)]
@@ -29,6 +36,18 @@ impl Program {
     pub fn host_and_pi(pi: RaspberryPi64Target) -> Program {
         Program {
             targets: vec![CargoBuildTarget::Host, CargoBuildTarget::RaspberryPi64(pi)],
+        }
+    }
+
+    pub fn wasi() -> Program {
+        Program {
+            targets: vec![CargoBuildTarget::Wasi],
+        }
+    }
+
+    pub fn wasi_threads(threads: WasiThreadsTarget) -> Program {
+        Program {
+            targets: vec![CargoBuildTarget::WasiThreads(threads)],
         }
     }
 
@@ -229,11 +248,55 @@ async fn run_cargo_build_for_raspberry_pi(
     .await
 }
 
+async fn run_cargo_build_target_name(
+    project: &std::path::Path,
+    target_name: &str,
+) -> NumberOfErrors {
+    run_cargo(
+        &project,
+        &["build", "--target", &target_name],
+        &HashMap::new(),
+    )
+    .await
+}
+
+async fn run_cargo_build_wasi_threads(
+    project: &std::path::Path,
+    wasi_sdk: &std::path::Path,
+    target_name: &str,
+) -> NumberOfErrors {
+    // With default compiler options, wasmtime fails to run an application using SQLite:
+    // "unknown import: `env::__extenddftf2` has not been defined"
+    // This has something to do with long double (?).
+    // Solution from: https://github.com/nmandery/h3ron/blob/9d80a2bf9fd5c4f311e64ffd40087dfb41fa55a5/h3ron/examples/compile_to_wasi/Makefile
+    let lib_dir = wasi_sdk.join("lib/clang/18/lib/wasip1");
+    if !confirm_directory(&lib_dir) {
+        return NumberOfErrors(1);
+    }
+    let lib_dir_str = lib_dir
+        .to_str()
+        .expect("Tried to convert a path to a string");
+    let clang_exe = wasi_sdk.join("bin/clang.exe");
+    let clang_exe_str = clang_exe
+        .to_str()
+        .expect("Tried to convert a path to a string");
+    run_process_with_error_only_output(&project, std::path::Path::new(
+         "rustup"), &["run" ,"nightly", "cargo", "build", "--target", target_name], &HashMap::from([
+        ("CFLAGS".to_string(), "-pthread".to_string()),
+        ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32" ,lib_dir_str)),
+        (format!("CC_{}", target_name), clang_exe_str.to_string()),
+    ])).await
+}
+
 async fn run_cargo_build(project: &std::path::Path, target: &CargoBuildTarget) -> NumberOfErrors {
     match target {
         CargoBuildTarget::Host => run_cargo(&project, &["build"], &HashMap::new()).await,
         CargoBuildTarget::RaspberryPi64(pi) => {
             run_cargo_build_for_raspberry_pi(&project, &pi.compiler_installation).await
+        }
+        CargoBuildTarget::Wasi => run_cargo_build_target_name(project, "wasm32-wasi").await,
+        CargoBuildTarget::WasiThreads(threads) => {
+            run_cargo_build_wasi_threads(project, &threads.wasi_sdk, "wasm32-wasip1-threads").await
         }
     }
 }
@@ -315,7 +378,9 @@ async fn install_raspberry_pi_cpp_compiler(
     }
 }
 
-async fn install_wasi_cpp_compiler(tools_directory: &std::path::Path) -> NumberOfErrors {
+async fn install_wasi_cpp_compiler(
+    tools_directory: &std::path::Path,
+) -> (NumberOfErrors, Option<WasiThreadsTarget>) {
     let compiler_name = "wasi-sdk-22";
     let archive_file_name = format!("{}.0.m-mingw.tar.gz", compiler_name);
     let download_url = format!(
@@ -329,10 +394,20 @@ async fn install_wasi_cpp_compiler(tools_directory: &std::path::Path) -> NumberO
         &unpacked_directory,
         downloads::Compression::Gz,
     ) {
-        Ok(_) => NumberOfErrors(0),
+        Ok(_) => {
+            let sub_dir = unpacked_directory.join(format!("{}.0+m", compiler_name));
+            if confirm_directory(&sub_dir) {
+                (
+                    NumberOfErrors(0),
+                    Some(WasiThreadsTarget { wasi_sdk: sub_dir }),
+                )
+            } else {
+                (NumberOfErrors(1), None)
+            }
+        }
         Err(error) => {
             println!("Could not download and unpack {}: {}", &download_url, error);
-            NumberOfErrors(1)
+            (NumberOfErrors(1), None)
         }
     }
 }
@@ -371,15 +446,21 @@ async fn install_rust_toolchain(working_directory: &std::path::Path) -> NumberOf
 
 async fn install_tools(
     repository: &std::path::Path,
-) -> (NumberOfErrors, Option<RaspberryPi64Target>) {
+) -> (
+    NumberOfErrors,
+    Option<RaspberryPi64Target>,
+    Option<WasiThreadsTarget>,
+) {
     let tools_directory = repository.join("tools");
-    let (error_count, raspberry_pi) = install_raspberry_pi_cpp_compiler(&tools_directory).await;
+    let (error_count_1, raspberry_pi) = install_raspberry_pi_cpp_compiler(&tools_directory).await;
+    let (error_count_2, wasi_threads) = install_wasi_cpp_compiler(&tools_directory).await;
     (
-        error_count
-            + install_wasi_cpp_compiler(&tools_directory).await
+        error_count_1
+            + error_count_2
             + install_rust_targets(&repository).await
             + install_rust_toolchain(&repository).await,
         raspberry_pi,
+        wasi_threads,
     )
 }
 
@@ -391,7 +472,7 @@ async fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     let repository = std::path::Path::new(&command_line_arguments[1]);
-    let (mut error_count, maybe_raspberry_pi) = install_tools(repository).await;
+    let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) = install_tools(repository).await;
 
     let root = Directory {
         entries: BTreeMap::from([
@@ -412,7 +493,7 @@ async fn main() -> std::process::ExitCode {
                             entries: BTreeMap::from([
                                 (
                                     "call_api".to_string(),
-                                    DirectoryEntry::Program(Program::other()),
+                                    DirectoryEntry::Program(Program::wasi()),
                                 ),
                                 (
                                     "database".to_string(),
@@ -420,15 +501,20 @@ async fn main() -> std::process::ExitCode {
                                         entries: BTreeMap::from([
                                             (
                                                 "database_client".to_string(),
-                                                DirectoryEntry::Program(Program::other()),
+                                                DirectoryEntry::Program(Program::wasi()),
                                             ),
                                             (
                                                 "database_server".to_string(),
-                                                DirectoryEntry::Program(Program::other()),
+                                                DirectoryEntry::Program(match maybe_wasi_threads {
+                                                    Some(ref wasi_threads) => {
+                                                        Program::wasi_threads(wasi_threads.clone())
+                                                    }
+                                                    None => Program::other(),
+                                                }),
                                             ),
                                             (
                                                 "database_trait".to_string(),
-                                                DirectoryEntry::Program(Program::other()),
+                                                DirectoryEntry::Program(Program::wasi()),
                                             ),
                                         ]),
                                     }),
@@ -439,30 +525,35 @@ async fn main() -> std::process::ExitCode {
                                         entries: BTreeMap::from([
                                             (
                                                 "essrpc_client".to_string(),
-                                                DirectoryEntry::Program(Program::other()),
+                                                DirectoryEntry::Program(Program::wasi()),
                                             ),
                                             (
                                                 "essrpc_server".to_string(),
-                                                DirectoryEntry::Program(Program::other()),
+                                                DirectoryEntry::Program(match maybe_wasi_threads {
+                                                    Some(ref wasi_threads) => {
+                                                        Program::wasi_threads(wasi_threads.clone())
+                                                    }
+                                                    None => Program::other(),
+                                                }),
                                             ),
                                             (
                                                 "essrpc_trait".to_string(),
-                                                DirectoryEntry::Program(Program::other()),
+                                                DirectoryEntry::Program(Program::wasi()),
                                             ),
                                         ]),
                                     }),
                                 ),
                                 (
                                     "hello_rust".to_string(),
-                                    DirectoryEntry::Program(Program::other()),
+                                    DirectoryEntry::Program(Program::wasi()),
                                 ),
                                 (
                                     "idle_service".to_string(),
-                                    DirectoryEntry::Program(Program::other()),
+                                    DirectoryEntry::Program(Program::wasi()),
                                 ),
                                 (
                                     "provide_api".to_string(),
-                                    DirectoryEntry::Program(Program::other()),
+                                    DirectoryEntry::Program(Program::wasi()),
                                 ),
                             ]),
                         }),
