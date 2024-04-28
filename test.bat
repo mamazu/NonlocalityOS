@@ -1,3 +1,9 @@
-cls || exit /B 1
-call .\astra.bat || exit /B 1
-echo Success!
+setlocal
+
+set repository=%~dp0
+
+pushd astra || exit /B 1
+cargo run --release %repository% || exit /B 1
+popd
+
+endlocal
