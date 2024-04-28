@@ -114,7 +114,7 @@ async fn install_raspberry_pi_cpp_compiler(tools_directory: &std::path::Path) ->
         &download_url,
         &tools_directory.join(&archive_file_name),
         &unpacked_directory,
-        "tar.xz",
+        downloads::Compression::Xz,
     ) {
         Ok(_) => NumberOfErrors(0),
         Err(error) => {
@@ -136,7 +136,7 @@ async fn install_wasi_cpp_compiler(tools_directory: &std::path::Path) -> NumberO
         &download_url,
         &tools_directory.join(&archive_file_name),
         &unpacked_directory,
-        "tar.gz",
+        downloads::Compression::Gz,
     ) {
         Ok(_) => NumberOfErrors(0),
         Err(error) => {

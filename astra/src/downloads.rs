@@ -77,11 +77,16 @@ fn unpack(
     Ok(())
 }
 
+pub enum Compression {
+    Xz,
+    Gz,
+}
+
 pub fn install_from_downloaded_archive(
     download_url: &str,
     download_file_path: &Path,
     unpack_destination_directory: &Path,
-    archive_type: &str,
+    compression: Compression,
 ) -> Result<(), std::io::Error> {
     if let Ok(metadata) = fs::metadata(unpack_destination_directory) {
         if metadata.is_dir() {
@@ -114,14 +119,13 @@ pub fn install_from_downloaded_archive(
         download(&download_url, download_file_path)?;
     }
 
-    match archive_type {
-        "tar.xz" => unpack(download_file_path, unpack_destination_directory, |input| {
+    match compression {
+        Compression::Xz => unpack(download_file_path, unpack_destination_directory, |input| {
             Ok(Box::new(XzDecoder::new_multi_decoder(input)))
         })?,
-        "tar.gz" => unpack(download_file_path, unpack_destination_directory, |input| {
+        Compression::Gz => unpack(download_file_path, unpack_destination_directory, |input| {
             Ok(Box::new(GzDecoder::new(input)))
         })?,
-        _ => panic!("Unknown archive type: {}.", archive_type),
     }
     Ok(())
 }
