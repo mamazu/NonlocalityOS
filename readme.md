@@ -12,7 +12,7 @@
 
 ## Windows
 
-* run `format.bat`
+* run `test.bat`
 
 ## Visual Studio Code
 
