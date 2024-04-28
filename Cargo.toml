@@ -1,0 +1,11 @@
+[workspace]
+members=[
+    "admin_tool",
+    "downloader",
+    "management_service",
+    "nonlocality_env",
+]
+exclude=[
+    "example_applications"
+]
+resolver="2"
