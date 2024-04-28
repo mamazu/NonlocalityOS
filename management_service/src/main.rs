@@ -1,6 +1,11 @@
 #![deny(warnings)]
 use anyhow::bail;
 use display_bytes::display_bytes;
+use essrpc::transports::BincodeTransport;
+use essrpc::RPCError;
+use essrpc::RPCServer;
+use management_interface::ManagementInterface;
+use management_interface::ManagementInterfaceRPCServer;
 use normalize_path::NormalizePath;
 use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
@@ -412,8 +417,54 @@ fn run_wasi_process(
     }
 }
 
-fn main() -> ExitCode {
+struct ManagementInterfaceImpl {
+    request_shutdown: tokio::sync::mpsc::Sender<()>,
+}
+
+impl ManagementInterface for ManagementInterfaceImpl {
+    fn shutdown(&self) -> Result<bool, RPCError> {
+        println!("Shutdown requested.");
+        let handle = tokio::runtime::Handle::current();
+        match handle.block_on(self.request_shutdown.send(())) {
+            Ok(_) => Ok(true),
+            Err(error) => {
+                println!("Requesting shutdown failed: {}.", error);
+                Ok(false)
+            }
+        }
+    }
+}
+
+fn handle_external_requests(
+    stream: tokio::net::TcpStream,
+    request_shutdown: tokio::sync::mpsc::Sender<()>,
+) {
+    let sync_stream = tokio_util::io::SyncIoBridge::new(stream);
+    let mut server = ManagementInterfaceRPCServer::new(
+        ManagementInterfaceImpl { request_shutdown },
+        BincodeTransport::new(sync_stream),
+    );
+    match server.serve() {
+        Ok(_) => {}
+        Err(error) => {
+            println!("External request server failed with {}.", error);
+        }
+    }
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+
+    let external_port = "127.0.0.1:6969";
+    let external_port_listener = match tokio::net::TcpListener::bind(external_port).await {
+        Ok(success) => success,
+        Err(error) => {
+            println!("Could not bind {}: {}", external_port, error);
+            return ExitCode::FAILURE;
+        }
+    };
+
     let repository = Path::new(&args[1]).normalize();
     let order = Order {
         wasi_processes: vec![
@@ -492,8 +543,41 @@ fn main() -> ExitCode {
         ],
     };
 
+    let (request_shutdown, mut shutdown_requested) = tokio::sync::mpsc::channel::<()>(1);
+    let background_acceptor = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                maybe_accepted = external_port_listener.accept() => match maybe_accepted{
+                    Ok(incoming_connection) => {
+                        println!(
+                            "Accepted external API connection from {}.",
+                            incoming_connection.1
+                        );
+                        let request_shutdown_clone = request_shutdown.clone();
+                        tokio::task::spawn_blocking(move || {
+                            handle_external_requests(incoming_connection.0, request_shutdown_clone);
+                        });
+                    }
+                    Err(error) => {
+                        println!("Accept failed with {}.", error);
+                        break;
+                    }
+                },
+                maybe_received = shutdown_requested.recv() => {
+                    match maybe_received {
+                        Some(_) => {
+                            println!("Not accepting external connections anymore.");
+                            break;
+                        },
+                        None => unreachable!("The sender remains on the stack, so the channel will never be closed."),
+                    }
+                }
+            }
+        }
+    });
+
     let api_hub = Arc::new(InterServiceApiHub::new());
-    thread::scope(|s| {
+    let exit_code = thread::scope(|s| {
         let mut threads = Vec::new();
         for wasi_process in order.wasi_processes {
             let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
@@ -550,7 +634,10 @@ fn main() -> ExitCode {
                 }
             }
         }
+
         println!("All threads completed.");
         exit_code
-    })
+    });
+    background_acceptor.await.unwrap();
+    exit_code
 }

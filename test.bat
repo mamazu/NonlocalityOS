@@ -24,6 +24,14 @@ set CC_wasm32-wasip1-threads=%CC_wasm32-wasi%
 
 popd
 
+pushd management_interface || exit /B 1
+cargo test || exit /B 1
+popd
+
+pushd admin_tool || exit /B 1
+cargo test || exit /B 1
+popd
+
 pushd management_service || exit /B 1
 cargo test || exit /B 1
 

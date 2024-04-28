@@ -5,6 +5,14 @@ pushd downloader || exit /B 1
 cargo fmt || exit /B 1
 popd
 
+pushd management_interface || exit /B 1
+cargo fmt || exit /B 1
+popd
+
+pushd admin_tool || exit /B 1
+cargo fmt || exit /B 1
+popd
+
 pushd management_service || exit /B 1
 cargo fmt || exit /B 1
 popd
