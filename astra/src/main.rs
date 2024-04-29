@@ -382,6 +382,7 @@ async fn build_and_test_program(
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    command: AstraCommand,
 ) -> NumberOfErrors {
     let mut tasks = Vec::new();
 
@@ -391,30 +392,35 @@ async fn build_and_test_program(
         run_cargo_fmt(&where_in_filesystem_clone, &error_reporter_clone).await
     }));
 
-    let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
-    let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
-    let error_reporter_clone = error_reporter.clone();
-    tasks.push(tokio::spawn(async move {
-        run_cargo_test(
-            &where_in_filesystem_clone,
-            &coverage_info_directory_clone,
-            &error_reporter_clone,
-        )
-        .await
-    }));
-
-    for target in &program.targets {
-        let target_clone = target.clone();
-        let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
-        let error_reporter_clone = error_reporter.clone();
-        tasks.push(tokio::spawn(async move {
-            run_cargo_build(
-                &where_in_filesystem_clone,
-                &target_clone,
-                &error_reporter_clone,
-            )
-            .await
-        }));
+    match command {
+        AstraCommand::Build => {
+            for target in &program.targets {
+                let target_clone = target.clone();
+                let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
+                let error_reporter_clone = error_reporter.clone();
+                tasks.push(tokio::spawn(async move {
+                    run_cargo_build(
+                        &where_in_filesystem_clone,
+                        &target_clone,
+                        &error_reporter_clone,
+                    )
+                    .await
+                }));
+            }
+        }
+        AstraCommand::Test => {
+            let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
+            let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
+            let error_reporter_clone = error_reporter.clone();
+            tasks.push(tokio::spawn(async move {
+                run_cargo_test(
+                    &where_in_filesystem_clone,
+                    &coverage_info_directory_clone,
+                    &error_reporter_clone,
+                )
+                .await
+            }));
+        }
     }
     join_all(tasks, error_reporter).await
 }
@@ -425,6 +431,7 @@ async fn build_and_test_directory_entry(
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     error_reporter: Arc<dyn ReportError + Sync + Send>,
+    command: AstraCommand,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
     match directory_entry {
@@ -434,6 +441,7 @@ async fn build_and_test_directory_entry(
                 &where_in_filesystem,
                 coverage_info_directory,
                 &error_reporter,
+                command,
             )
             .await;
         }
@@ -443,6 +451,7 @@ async fn build_and_test_directory_entry(
                 &where_in_filesystem,
                 coverage_info_directory,
                 &error_reporter,
+                command,
             )
             .await;
         }
@@ -475,6 +484,7 @@ async fn build_and_test_recursively(
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    command: AstraCommand,
 ) -> NumberOfErrors {
     let mut tasks = Vec::new();
     for entry in &description.entries {
@@ -482,12 +492,14 @@ async fn build_and_test_recursively(
         let directory_entry = entry.1.clone();
         let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
         let error_reporter_clone = error_reporter.clone();
+        let command_clone = command.clone();
         tasks.push(tokio::spawn(async move {
             build_and_test_directory_entry(
                 &directory_entry,
                 &subdirectory,
                 &coverage_info_directory_clone,
                 error_reporter_clone,
+                command_clone,
             )
             .await
         }));
@@ -726,20 +738,51 @@ impl ReportError for ConsoleErrorReporter {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AstraCommand {
+    Build,
+    Test,
+}
+
+fn parse_command(input: &str) -> Option<AstraCommand> {
+    match input {
+        "build" => Some(AstraCommand::Build),
+        "test" => Some(AstraCommand::Test),
+        _ => None,
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::process::ExitCode {
     let started_at = std::time::Instant::now();
     let command_line_arguments: Vec<String> = std::env::args().collect();
-    if command_line_arguments.len() != 2 {
-        println!("One command line argument required: Path to the root of the repository.");
+    if command_line_arguments.len() != 3 {
+        println!(
+            "Two command line arguments required: [Path to the root of the repository] test|build"
+        );
         return std::process::ExitCode::FAILURE;
     }
     let repository = std::path::Path::new(&command_line_arguments[1]);
+    let command_input = &command_line_arguments[2];
+    let command = match parse_command(command_input) {
+        Some(success) => success,
+        None => {
+            println!("Unknown command: {}", command_input);
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    println!("Command: {:?}", &command);
     let error_reporter: Arc<dyn ReportError + Send + Sync> = Arc::new(ConsoleErrorReporter {});
     let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) =
         install_tools(repository, &error_reporter).await;
-    error_count += install_grcov(repository, &error_reporter).await;
-    error_count += install_llvm_tools_preview(repository, &error_reporter).await;
+
+    match command {
+        AstraCommand::Build => {}
+        AstraCommand::Test => {
+            error_count += install_grcov(repository, &error_reporter).await;
+            error_count += install_llvm_tools_preview(repository, &error_reporter).await;
+        }
+    }
 
     let root = Directory {
         entries: BTreeMap::from([
@@ -853,17 +896,23 @@ async fn main() -> std::process::ExitCode {
         &repository,
         &coverage_info_directory,
         &error_reporter,
+        command,
     )
     .await;
 
-    let coverage_report_directory = coverage_directory.join("report");
-    error_count += generate_coverage_report_with_grcov(
-        &repository,
-        &coverage_info_directory,
-        &coverage_report_directory,
-        &error_reporter,
-    )
-    .await;
+    match command {
+        AstraCommand::Build => {}
+        AstraCommand::Test => {
+            let coverage_report_directory = coverage_directory.join("report");
+            error_count += generate_coverage_report_with_grcov(
+                &repository,
+                &coverage_info_directory,
+                &coverage_report_directory,
+                &error_reporter,
+            )
+            .await;
+        }
+    }
 
     let build_duration = started_at.elapsed();
     println!("Build duration: {:?}", build_duration);
