@@ -1,6 +1,8 @@
 #![deny(warnings)]
 use async_recursion::async_recursion;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write;
+use std::sync::Arc;
 pub mod downloads;
 
 #[derive(Clone)]
@@ -80,6 +82,10 @@ impl std::ops::Add<NumberOfErrors> for NumberOfErrors {
     }
 }
 
+trait ReportError {
+    fn report(&self, error_message: &str);
+}
+
 impl std::ops::AddAssign for NumberOfErrors {
     fn add_assign(&mut self, rhs: NumberOfErrors) {
         *self = *self + rhs;
@@ -91,6 +97,7 @@ async fn run_process_with_error_only_output(
     executable: &std::path::Path,
     arguments: &[&str],
     environment_variables: &HashMap<String, String>,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     /*println!(
         "{}> {} {}",
@@ -122,17 +129,24 @@ async fn run_process_with_error_only_output(
     if output.status.success() {
         return NumberOfErrors(0);
     }
-    println!("Executable: {}", executable.display());
-    println!("Arguments: {}", arguments.join(" "));
-    println!("Environment: {:?}", &environment_variables);
-    println!("Working directory: {}", working_directory.display());
-    println!("Exit status: {}", output.status);
-    println!("Standard output:");
+    let mut error_message = String::from("");
+    write!(error_message, "Executable: {}", executable.display()).unwrap();
+    write!(error_message, "Arguments: {}", arguments.join(" ")).unwrap();
+    write!(error_message, "Environment: {:?}", &environment_variables).unwrap();
+    write!(
+        error_message,
+        "Working directory: {}",
+        working_directory.display()
+    )
+    .unwrap();
+    write!(error_message, "Exit status: {}", output.status).unwrap();
+    write!(error_message, "Standard output:").unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("{}", &stdout);
-    println!("Standard error:");
+    write!(error_message, "{}", &stdout).unwrap();
+    write!(error_message, "Standard error:").unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("{}", &stderr);
+    write!(error_message, "{}", &stderr).unwrap();
+    error_reporter.report(&error_message);
     NumberOfErrors(1)
 }
 
@@ -140,23 +154,29 @@ async fn run_cargo(
     working_directory: &std::path::Path,
     arguments: &[&str],
     environment_variables: &HashMap<String, String>,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
         &working_directory,
         std::path::Path::new("cargo"),
         &arguments,
         &environment_variables,
+        error_reporter,
     )
     .await
 }
 
-async fn run_cargo_fmt(project: &std::path::Path) -> NumberOfErrors {
-    run_cargo(&project, &["fmt"], &HashMap::new()).await
+async fn run_cargo_fmt(
+    project: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
+    run_cargo(&project, &["fmt"], &HashMap::new(), error_reporter).await
 }
 
 async fn run_cargo_test(
     project: &std::path::Path,
     coverage_info_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     let coverage_info_directory_str = coverage_info_directory
         .to_str()
@@ -171,6 +191,7 @@ async fn run_cargo_test(
                 format!("{}/cargo-test-%p-%m.profraw", coverage_info_directory_str),
             ),
         ]),
+        error_reporter,
     )
     .await
 }
@@ -228,6 +249,7 @@ fn confirm_directory(path: &std::path::Path) -> bool {
 async fn run_cargo_build_for_raspberry_pi(
     project: &std::path::Path,
     compiler_installation: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     let target_name = RASPBERRY_PI_TARGET_NAME;
     let bin = compiler_installation.join("bin");
@@ -268,6 +290,7 @@ async fn run_cargo_build_for_raspberry_pi(
             "--release",
         ],
         &environment_variables,
+        error_reporter,
     )
     .await
 }
@@ -275,11 +298,13 @@ async fn run_cargo_build_for_raspberry_pi(
 async fn run_cargo_build_target_name(
     project: &std::path::Path,
     target_name: &str,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     run_cargo(
         &project,
         &["build", "--verbose", "--target", &target_name],
         &HashMap::new(),
+        error_reporter,
     )
     .await
 }
@@ -288,6 +313,7 @@ async fn run_cargo_build_wasi_threads(
     project: &std::path::Path,
     wasi_sdk: &std::path::Path,
     target_name: &str,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     // With default compiler options, wasmtime fails to run an application using SQLite:
     // "unknown import: `env::__extenddftf2` has not been defined"
@@ -309,27 +335,44 @@ async fn run_cargo_build_wasi_threads(
         ("CFLAGS".to_string(), "-pthread".to_string()),
         ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32", lib_dir_str)),
         (format!("CC_{}", target_name), clang_exe_str.to_string()),
-    ])).await
+    ]), error_reporter).await
 }
 
-async fn run_cargo_build_for_host(project: &std::path::Path) -> NumberOfErrors {
+async fn run_cargo_build_for_host(
+    project: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
     run_cargo(
         &project,
         &["build", "--verbose", "--release"],
         &HashMap::new(),
+        error_reporter,
     )
     .await
 }
 
-async fn run_cargo_build(project: &std::path::Path, target: &CargoBuildTarget) -> NumberOfErrors {
+async fn run_cargo_build(
+    project: &std::path::Path,
+    target: &CargoBuildTarget,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
     match target {
-        CargoBuildTarget::Host => run_cargo_build_for_host(project).await,
+        CargoBuildTarget::Host => run_cargo_build_for_host(project, error_reporter).await,
         CargoBuildTarget::RaspberryPi64(pi) => {
-            run_cargo_build_for_raspberry_pi(&project, &pi.compiler_installation).await
+            run_cargo_build_for_raspberry_pi(&project, &pi.compiler_installation, error_reporter)
+                .await
         }
-        CargoBuildTarget::Wasi => run_cargo_build_target_name(project, "wasm32-wasi").await,
+        CargoBuildTarget::Wasi => {
+            run_cargo_build_target_name(project, "wasm32-wasi", error_reporter).await
+        }
         CargoBuildTarget::WasiThreads(threads) => {
-            run_cargo_build_wasi_threads(project, &threads.wasi_sdk, "wasm32-wasip1-threads").await
+            run_cargo_build_wasi_threads(
+                project,
+                &threads.wasi_sdk,
+                "wasm32-wasip1-threads",
+                error_reporter,
+            )
+            .await
         }
     }
 }
@@ -337,10 +380,11 @@ async fn run_cargo_build(project: &std::path::Path, target: &CargoBuildTarget) -
 async fn build_relevant_targets(
     program: &Program,
     where_in_filesystem: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
     for target in &program.targets {
-        error_count += run_cargo_build(where_in_filesystem, target).await
+        error_count += run_cargo_build(where_in_filesystem, target, error_reporter).await
     }
     error_count
 }
@@ -349,10 +393,16 @@ async fn build_and_test_program(
     program: &Program,
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
-    run_cargo_fmt(&where_in_filesystem).await
-        + run_cargo_test(&where_in_filesystem, coverage_info_directory).await
-        + build_relevant_targets(program, where_in_filesystem).await
+    run_cargo_fmt(&where_in_filesystem, error_reporter).await
+        + run_cargo_test(
+            &where_in_filesystem,
+            coverage_info_directory,
+            error_reporter,
+        )
+        .await
+        + build_relevant_targets(program, where_in_filesystem, error_reporter).await
 }
 
 #[async_recursion]
@@ -360,19 +410,25 @@ async fn build_and_test_directory_entry(
     directory_entry: &DirectoryEntry,
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
+    error_reporter: Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
     match directory_entry {
         DirectoryEntry::Program(program) => {
-            error_count +=
-                build_and_test_program(&program, &where_in_filesystem, coverage_info_directory)
-                    .await;
+            error_count += build_and_test_program(
+                &program,
+                &where_in_filesystem,
+                coverage_info_directory,
+                &error_reporter,
+            )
+            .await;
         }
         DirectoryEntry::Directory(directory) => {
             error_count += build_and_test_recursively(
                 &directory,
                 &where_in_filesystem,
                 coverage_info_directory,
+                &error_reporter,
             )
             .await;
         }
@@ -385,18 +441,42 @@ async fn build_and_test_recursively(
     description: &Directory,
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
+    let mut set = Vec::new();
     for entry in &description.entries {
         let subdirectory = where_in_filesystem.join(entry.0);
-        error_count +=
-            build_and_test_directory_entry(&entry.1, &subdirectory, coverage_info_directory).await;
+        let directory_entry = entry.1.clone();
+        let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
+        let error_reporter_clone = error_reporter.clone();
+        set.push(tokio::spawn(async move {
+            build_and_test_directory_entry(
+                &directory_entry,
+                &subdirectory,
+                &coverage_info_directory_clone,
+                error_reporter_clone,
+            )
+            .await
+        }));
+    }
+    for entry in set {
+        let result = entry.await;
+        match result {
+            Ok(errors) => {
+                error_count += errors;
+            }
+            Err(error) => {
+                error_reporter.report(&format!("Failed to join a spawned task: {}", error))
+            }
+        }
     }
     error_count
 }
 
 async fn install_raspberry_pi_cpp_compiler(
     tools_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> (NumberOfErrors, Option<RaspberryPi64Target>) {
     // found this compiler on https://developer.arm.com/downloads/-/gnu-a
     let compiler_name = "gcc-arm-10.3-2021.07-mingw-w64-i686-aarch64-none-linux-gnu";
@@ -416,7 +496,10 @@ async fn install_raspberry_pi_cpp_compiler(
             }),
         ),
         Err(error) => {
-            println!("Could not download and unpack {}: {}", &download_url, error);
+            error_reporter.report(&format!(
+                "Could not download and unpack {}: {}",
+                &download_url, error
+            ));
             (NumberOfErrors(1), None)
         }
     }
@@ -424,6 +507,7 @@ async fn install_raspberry_pi_cpp_compiler(
 
 async fn install_wasi_cpp_compiler(
     tools_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> (NumberOfErrors, Option<WasiThreadsTarget>) {
     let compiler_name = "wasi-sdk-22";
     let archive_file_name = format!("{}.0.m-mingw.tar.gz", compiler_name);
@@ -450,7 +534,10 @@ async fn install_wasi_cpp_compiler(
             }
         }
         Err(error) => {
-            println!("Could not download and unpack {}: {}", &download_url, error);
+            error_reporter.report(&format!(
+                "Could not download and unpack {}: {}",
+                &download_url, error
+            ));
             (NumberOfErrors(1), None)
         }
     }
@@ -462,62 +549,99 @@ async fn install_rust_target(
     working_directory: &std::path::Path,
     target_name: &str,
     channel: &str,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
         working_directory,
         std::path::Path::new(RUSTUP_EXECUTABLE),
         &["target", "add", &target_name, "--toolchain", &channel],
         &HashMap::new(),
+        error_reporter,
     )
     .await
 }
 
-async fn install_rust_targets(working_directory: &std::path::Path) -> NumberOfErrors {
-    install_rust_target(working_directory, RASPBERRY_PI_TARGET_NAME, "stable").await
-        + install_rust_target(working_directory, "wasm32-wasi", "stable").await
-        + install_rust_target(working_directory, "wasm32-wasip1-threads", "nightly").await
+async fn install_rust_targets(
+    working_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
+    install_rust_target(
+        working_directory,
+        RASPBERRY_PI_TARGET_NAME,
+        "stable",
+        error_reporter,
+    )
+    .await
+        + install_rust_target(working_directory, "wasm32-wasi", "stable", error_reporter).await
+        + install_rust_target(
+            working_directory,
+            "wasm32-wasip1-threads",
+            "nightly",
+            error_reporter,
+        )
+        .await
 }
 
-async fn install_rust_toolchain(working_directory: &std::path::Path) -> NumberOfErrors {
+async fn install_rust_toolchain(
+    working_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
     run_process_with_error_only_output(
         working_directory,
         std::path::Path::new(RUSTUP_EXECUTABLE),
         &["toolchain", "install", "nightly-x86_64-pc-windows-msvc"],
         &HashMap::new(),
+        error_reporter,
     )
     .await
 }
 
 async fn install_tools(
     repository: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> (
     NumberOfErrors,
     Option<RaspberryPi64Target>,
     Option<WasiThreadsTarget>,
 ) {
     let tools_directory = repository.join("tools");
-    let (error_count_1, raspberry_pi) = install_raspberry_pi_cpp_compiler(&tools_directory).await;
-    let (error_count_2, wasi_threads) = install_wasi_cpp_compiler(&tools_directory).await;
+    let (error_count_1, raspberry_pi) =
+        install_raspberry_pi_cpp_compiler(&tools_directory, error_reporter).await;
+    let (error_count_2, wasi_threads) =
+        install_wasi_cpp_compiler(&tools_directory, error_reporter).await;
     (
         error_count_1
             + error_count_2
-            + install_rust_targets(&repository).await
-            + install_rust_toolchain(&repository).await,
+            + install_rust_targets(&repository, error_reporter).await
+            + install_rust_toolchain(&repository, error_reporter).await,
         raspberry_pi,
         wasi_threads,
     )
 }
 
-async fn install_grcov(working_directory: &std::path::Path) -> NumberOfErrors {
-    run_cargo(&working_directory, &["install", "grcov"], &HashMap::new()).await
+async fn install_grcov(
+    working_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
+    run_cargo(
+        &working_directory,
+        &["install", "grcov"],
+        &HashMap::new(),
+        error_reporter,
+    )
+    .await
 }
 
-async fn install_llvm_tools_preview(working_directory: &std::path::Path) -> NumberOfErrors {
+async fn install_llvm_tools_preview(
+    working_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
     run_process_with_error_only_output(
         &working_directory,
         std::path::Path::new("rustup"),
         &["component", "add", "llvm-tools-preview"],
         &HashMap::new(),
+        error_reporter,
     )
     .await
 }
@@ -526,6 +650,7 @@ async fn generate_coverage_report_with_grcov(
     repository: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     coverage_report_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
         &repository,
@@ -554,6 +679,7 @@ async fn generate_coverage_report_with_grcov(
                 .expect("Tried to convert path to string"),
         ],
         &HashMap::new(),
+        error_reporter,
     )
     .await
 }
@@ -571,6 +697,14 @@ fn delete_directory(root: &std::path::Path) -> NumberOfErrors {
     }
 }
 
+struct ConsoleErrorReporter {}
+
+impl ReportError for ConsoleErrorReporter {
+    fn report(&self, error_message: &str) {
+        println!("{}", &error_message);
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::process::ExitCode {
     let started_at = std::time::Instant::now();
@@ -580,9 +714,11 @@ async fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     let repository = std::path::Path::new(&command_line_arguments[1]);
-    let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) = install_tools(repository).await;
-    error_count += install_grcov(repository).await;
-    error_count += install_llvm_tools_preview(repository).await;
+    let error_reporter: Arc<dyn ReportError + Send + Sync> = Arc::new(ConsoleErrorReporter {});
+    let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) =
+        install_tools(repository, &error_reporter).await;
+    error_count += install_grcov(repository, &error_reporter).await;
+    error_count += install_llvm_tools_preview(repository, &error_reporter).await;
 
     let root = Directory {
         entries: BTreeMap::from([
@@ -691,13 +827,20 @@ async fn main() -> std::process::ExitCode {
     let coverage_directory = repository.join("coverage");
     let coverage_info_directory = coverage_directory.join("info");
     error_count += delete_directory(&coverage_info_directory);
-    error_count += build_and_test_recursively(&root, &repository, &coverage_info_directory).await;
+    error_count += build_and_test_recursively(
+        &root,
+        &repository,
+        &coverage_info_directory,
+        &error_reporter,
+    )
+    .await;
 
     let coverage_report_directory = coverage_directory.join("report");
     error_count += generate_coverage_report_with_grcov(
         &repository,
         &coverage_info_directory,
         &coverage_report_directory,
+        &error_reporter,
     )
     .await;
 
