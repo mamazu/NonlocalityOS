@@ -377,32 +377,46 @@ async fn run_cargo_build(
     }
 }
 
-async fn build_relevant_targets(
-    program: &Program,
-    where_in_filesystem: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
-) -> NumberOfErrors {
-    let mut error_count = NumberOfErrors(0);
-    for target in &program.targets {
-        error_count += run_cargo_build(where_in_filesystem, target, error_reporter).await
-    }
-    error_count
-}
-
 async fn build_and_test_program(
     program: &Program,
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
-    run_cargo_fmt(&where_in_filesystem, error_reporter).await
-        + run_cargo_test(
-            &where_in_filesystem,
-            coverage_info_directory,
-            error_reporter,
+    let mut tasks = Vec::new();
+
+    let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
+    let error_reporter_clone = error_reporter.clone();
+    tasks.push(tokio::spawn(async move {
+        run_cargo_fmt(&where_in_filesystem_clone, &error_reporter_clone).await
+    }));
+
+    let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
+    let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
+    let error_reporter_clone = error_reporter.clone();
+    tasks.push(tokio::spawn(async move {
+        run_cargo_test(
+            &where_in_filesystem_clone,
+            &coverage_info_directory_clone,
+            &error_reporter_clone,
         )
         .await
-        + build_relevant_targets(program, where_in_filesystem, error_reporter).await
+    }));
+
+    for target in &program.targets {
+        let target_clone = target.clone();
+        let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
+        let error_reporter_clone = error_reporter.clone();
+        tasks.push(tokio::spawn(async move {
+            run_cargo_build(
+                &where_in_filesystem_clone,
+                &target_clone,
+                &error_reporter_clone,
+            )
+            .await
+        }));
+    }
+    join_all(tasks, error_reporter).await
 }
 
 #[async_recursion]
