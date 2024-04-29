@@ -307,7 +307,7 @@ async fn run_cargo_build_wasi_threads(
     run_process_with_error_only_output(&project, std::path::Path::new(
          "rustup"), &["run" ,"nightly", "cargo", "build","--verbose", "--target", target_name], &HashMap::from([
         ("CFLAGS".to_string(), "-pthread".to_string()),
-        ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32" ,lib_dir_str)),
+        ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32", lib_dir_str)),
         (format!("CC_{}", target_name), clang_exe_str.to_string()),
     ])).await
 }
