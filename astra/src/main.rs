@@ -436,31 +436,12 @@ async fn build_and_test_directory_entry(
     error_count
 }
 
-#[async_recursion]
-async fn build_and_test_recursively(
-    description: &Directory,
-    where_in_filesystem: &std::path::Path,
-    coverage_info_directory: &std::path::Path,
+async fn join_all(
+    tasks: Vec<tokio::task::JoinHandle<NumberOfErrors>>,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
-    let mut set = Vec::new();
-    for entry in &description.entries {
-        let subdirectory = where_in_filesystem.join(entry.0);
-        let directory_entry = entry.1.clone();
-        let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
-        let error_reporter_clone = error_reporter.clone();
-        set.push(tokio::spawn(async move {
-            build_and_test_directory_entry(
-                &directory_entry,
-                &subdirectory,
-                &coverage_info_directory_clone,
-                error_reporter_clone,
-            )
-            .await
-        }));
-    }
-    for entry in set {
+    for entry in tasks {
         let result = entry.await;
         match result {
             Ok(errors) => {
@@ -472,6 +453,32 @@ async fn build_and_test_recursively(
         }
     }
     error_count
+}
+
+#[async_recursion]
+async fn build_and_test_recursively(
+    description: &Directory,
+    where_in_filesystem: &std::path::Path,
+    coverage_info_directory: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
+    let mut tasks = Vec::new();
+    for entry in &description.entries {
+        let subdirectory = where_in_filesystem.join(entry.0);
+        let directory_entry = entry.1.clone();
+        let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
+        let error_reporter_clone = error_reporter.clone();
+        tasks.push(tokio::spawn(async move {
+            build_and_test_directory_entry(
+                &directory_entry,
+                &subdirectory,
+                &coverage_info_directory_clone,
+                error_reporter_clone,
+            )
+            .await
+        }));
+    }
+    join_all(tasks, error_reporter).await
 }
 
 async fn install_raspberry_pi_cpp_compiler(
