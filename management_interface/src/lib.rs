@@ -3,16 +3,16 @@ use essrpc::RPCError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub struct BlobDigest(([u8; 32], [u8; 32]));
+pub struct BlobDigest(pub ([u8; 32], [u8; 32]));
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub struct IncomingInterfaceId(i32);
+pub struct IncomingInterfaceId(pub i32);
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub struct OutgoingInterfaceId(i32);
+pub struct OutgoingInterfaceId(pub i32);
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub struct ServiceId(i32);
+pub struct ServiceId(pub i32);
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub struct WasiProcess {
@@ -38,7 +38,9 @@ pub struct ClusterConfiguration {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub enum ConfigurationError {NotImplemented,}
+pub enum ConfigurationError {
+    NotImplemented,
+}
 
 #[essrpc]
 pub trait ManagementInterface {

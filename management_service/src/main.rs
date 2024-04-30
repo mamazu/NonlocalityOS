@@ -6,8 +6,11 @@ use essrpc::RPCError;
 use essrpc::RPCServer;
 use management_interface::ClusterConfiguration;
 use management_interface::ConfigurationError;
+use management_interface::IncomingInterfaceId;
 use management_interface::ManagementInterface;
 use management_interface::ManagementInterfaceRPCServer;
+use management_interface::OutgoingInterfaceId;
+use management_interface::ServiceId;
 use normalize_path::NormalizePath;
 use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
@@ -32,22 +35,6 @@ use wasi_common::{WasiCtx, WasiFile};
 use wasmtime::Config;
 use wasmtime::{Caller, Engine, Linker, Module, Store};
 use wasmtime_wasi_threads::WasiThreadsCtx;
-
-#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-struct IncomingInterfaceId(i32);
-
-#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-struct OutgoingInterfaceId(i32);
-
-#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-struct ServiceId(i32);
-
-// Some sources will tell you that #[derive(Display)] exists, but that is a lie.
-impl fmt::Display for ServiceId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 struct WasiProcess {
     web_assembly_file: RelativePathBuf,
@@ -457,7 +444,7 @@ fn run_wasi_process(
             println!("Main function returned.");
             Ok(())
         }
-        Err(error) => bail!("Service {} failed: {}", this_service_id, error),
+        Err(error) => bail!("Service {:?} failed: {}", this_service_id, error),
     }
 }
 
