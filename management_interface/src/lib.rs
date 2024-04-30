@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub struct BlobDigest(pub ([u8; 32], [u8; 32]));
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone)]
+pub enum Blob {
+    Digest(BlobDigest),
+    Direct(Vec<u8>),
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub struct IncomingInterfaceId(pub i32);
 
@@ -14,27 +20,40 @@ pub struct OutgoingInterfaceId(pub i32);
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub struct ServiceId(pub i32);
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone)]
 pub struct WasiProcess {
-    code: BlobDigest,
-    has_threads: bool,
+    pub code: Blob,
+    pub has_threads: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub struct IncomingInterface {
-    destination_service: ServiceId,
-    interface: IncomingInterfaceId,
+    pub destination_service: ServiceId,
+    pub interface: IncomingInterfaceId,
+}
+
+impl IncomingInterface {
+    pub fn new(
+        destination_service: ServiceId,
+        interface: IncomingInterfaceId,
+    ) -> IncomingInterface {
+        IncomingInterface {
+            destination_service,
+            interface,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone)]
 pub struct Service {
-    id: ServiceId,
-    outgoing_interfaces: std::collections::BTreeMap<OutgoingInterfaceId, IncomingInterface>,
+    pub id: ServiceId,
+    pub outgoing_interfaces: std::collections::BTreeMap<OutgoingInterfaceId, IncomingInterface>,
+    pub wasi: WasiProcess,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone)]
 pub struct ClusterConfiguration {
-    services: Vec<Service>,
+    pub services: Vec<Service>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]

@@ -6,6 +6,7 @@ use essrpc::RPCError;
 use essrpc::RPCServer;
 use management_interface::ClusterConfiguration;
 use management_interface::ConfigurationError;
+use management_interface::IncomingInterface;
 use management_interface::IncomingInterfaceId;
 use management_interface::ManagementInterface;
 use management_interface::ManagementInterfaceRPCServer;
@@ -39,7 +40,7 @@ struct WasiProcess {
     web_assembly_file: RelativePathBuf,
     has_threads: bool,
     id: ServiceId,
-    interfaces: BTreeMap<OutgoingInterfaceId, (ServiceId, IncomingInterfaceId)>,
+    interfaces: BTreeMap<OutgoingInterfaceId, IncomingInterface>,
 }
 
 struct Order {
@@ -294,8 +295,7 @@ struct InterServiceFuncContext {
     // Somehow it's impossible to reference local variables from wasmtime host functions, so we have to use reference counting for no real reason.
     api_hub: Arc<InterServiceApiHub>,
     this_service_id: ServiceId,
-    outgoing_interfaces:
-        Arc<std::collections::BTreeMap<OutgoingInterfaceId, (ServiceId, IncomingInterfaceId)>>,
+    outgoing_interfaces: Arc<std::collections::BTreeMap<OutgoingInterfaceId, IncomingInterface>>,
 }
 
 // Absolutely ridiculous hack necessary because it is impossible to return multiple values,
@@ -326,9 +326,7 @@ fn run_wasi_process(
     api_hub: Arc<InterServiceApiHub>,
     has_threads: bool,
     this_service_id: ServiceId,
-    outgoing_interfaces: Arc<
-        std::collections::BTreeMap<OutgoingInterfaceId, (ServiceId, IncomingInterfaceId)>,
-    >,
+    outgoing_interfaces: Arc<std::collections::BTreeMap<OutgoingInterfaceId, IncomingInterface>>,
 ) -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasi_common::sync::add_to_linker(&mut linker, |s: &mut InterServiceFuncContext| &mut s.wasi)?;
@@ -380,10 +378,10 @@ fn run_wasi_process(
                     Some(found) => found,
                     None => todo!(),
                 };
-                let stream = match context
-                    .api_hub
-                    .connect(connecting_interface.0, connecting_interface.1)
-                {
+                let stream = match context.api_hub.connect(
+                    connecting_interface.destination_service,
+                    connecting_interface.interface,
+                ) {
                     Ok(stream) => stream,
                     Err(error) => {
                         println!("nonlocality_connect failed with {}.", error);
@@ -632,7 +630,7 @@ async fn main() -> ExitCode {
                 .unwrap(),
                 has_threads: false,
                 id:   ServiceId(2),
-                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), (ServiceId(1), IncomingInterfaceId(0)))] ),
+                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), IncomingInterface::new(ServiceId(1), IncomingInterfaceId(0)))] ),
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
@@ -650,7 +648,7 @@ async fn main() -> ExitCode {
                 .unwrap(),
                 has_threads: false,
                 id:   ServiceId(4),
-                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), (ServiceId(3), IncomingInterfaceId(0)))] ),
+                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), IncomingInterface::new(ServiceId(3), IncomingInterfaceId(0)))] ),
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(
@@ -668,7 +666,7 @@ async fn main() -> ExitCode {
                 .unwrap(),
                 has_threads: false,
                 id:   ServiceId(6),
-                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), (ServiceId(5), IncomingInterfaceId(0)))] ),
+                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), IncomingInterface::new(ServiceId(5), IncomingInterfaceId(0)))] ),
             },
             WasiProcess {
                 web_assembly_file: RelativePathBuf::from_path(

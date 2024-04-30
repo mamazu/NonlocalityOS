@@ -72,6 +72,7 @@ dependencies = [
  "curl",
  "dotenv",
  "flate2",
+ "management_interface",
  "relative-path",
  "ssh2",
  "tar",

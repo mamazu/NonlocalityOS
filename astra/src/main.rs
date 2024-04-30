@@ -705,6 +705,9 @@ async fn generate_coverage_report_with_grcov(
             repository
                 .to_str()
                 .expect("Tried to convert path to string"),
+            // exclude some generated files in the target dir:
+            "--ignore",
+            "target/debug/build/*",
             "-t",
             "html",
             "--branch",
@@ -897,6 +900,7 @@ async fn build(
         CargoBuildMode::BuildRelease => {}
         CargoBuildMode::Test => {
             let coverage_report_directory = coverage_directory.join("report");
+            error_count += delete_directory(&coverage_report_directory);
             error_count += generate_coverage_report_with_grcov(
                 &repository,
                 &coverage_info_directory,
