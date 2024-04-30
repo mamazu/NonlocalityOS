@@ -1045,6 +1045,7 @@ name = "management_interface"
 version = "0.1.0"
 dependencies = [
  "essrpc",
+ "serde",
 ]
 
 [[package]]

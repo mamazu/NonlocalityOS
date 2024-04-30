@@ -4,6 +4,8 @@ use display_bytes::display_bytes;
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCError;
 use essrpc::RPCServer;
+use management_interface::ClusterConfiguration;
+use management_interface::ConfigurationError;
 use management_interface::ManagementInterface;
 use management_interface::ManagementInterfaceRPCServer;
 use normalize_path::NormalizePath;
@@ -17,6 +19,7 @@ use std::env;
 use std::fmt;
 use std::io::Read;
 use std::io::Write;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -132,6 +135,7 @@ impl WasiFile for InterServiceApiStream {
     }
 }
 
+#[derive(Debug)]
 enum InterServiceApiError {
     OnlyOneAcceptorSupportedAtTheMoment,
     UnknownInternalError,
@@ -178,6 +182,31 @@ fn create_pair_of_streams(
         reader: Mutex::new(download.0),
     };
     return Ok((server_side, client_side));
+}
+
+fn check_transfer(to: &mut dyn std::io::Read, from: &mut dyn std::io::Write) {
+    let message = &[1, 2, 3, 4];
+    from.write_all(&message[..]).unwrap();
+    let mut received: [u8; 4] = [0; 4];
+    to.read_exact(&mut received[..]).unwrap();
+    assert_eq!(&message[..], &received[..]);
+}
+
+#[test]
+fn test_create_pair_of_streams() {
+    let pair = create_pair_of_streams().unwrap();
+
+    {
+        let mut read = pair.0.reader.lock().unwrap();
+        let mut write = pair.1.writer.lock().unwrap();
+        check_transfer(&mut read.deref_mut(), &mut write.deref_mut());
+    }
+
+    {
+        let mut read = pair.1.reader.lock().unwrap();
+        let mut write = pair.0.writer.lock().unwrap();
+        check_transfer(&mut read.deref_mut(), &mut write.deref_mut());
+    }
 }
 
 struct AcceptResult {
@@ -285,6 +314,21 @@ struct InterServiceFuncContext {
 // or return things by reference parameter in wasmtime.
 fn encode_i32_pair(first: i32, second: i32) -> u64 {
     (((first as u32) as u64) << 32) | ((second as u32) as u64)
+}
+
+#[test]
+fn test_encode_i32_pair() {
+    assert_eq!(0, encode_i32_pair(0, 0));
+    assert_eq!(4294967296, encode_i32_pair(1, 0));
+    assert_eq!(1, encode_i32_pair(0, 1));
+    assert_eq!(9223372032559808512, encode_i32_pair(i32::MAX, 0));
+    assert_eq!(9223372034707292159, encode_i32_pair(i32::MAX, i32::MAX));
+    assert_eq!(2147483647, encode_i32_pair(0, i32::MAX));
+    assert_eq!(9223372036854775808, encode_i32_pair(i32::MIN, 0));
+    assert_eq!(9223372039002259456, encode_i32_pair(i32::MIN, i32::MIN));
+    assert_eq!(2147483648, encode_i32_pair(0, i32::MIN));
+    assert_eq!(9223372039002259455, encode_i32_pair(i32::MIN, i32::MAX));
+    assert_eq!(9223372034707292160, encode_i32_pair(i32::MAX, i32::MIN));
 }
 
 fn run_wasi_process(
@@ -432,6 +476,14 @@ impl ManagementInterface for ManagementInterfaceImpl {
                 Ok(false)
             }
         }
+    }
+
+    fn reconfigure(
+        &self,
+        configuration: ClusterConfiguration,
+    ) -> Result<Option<ConfigurationError>, RPCError> {
+        println!("Reconfigure: {:?}", &configuration);
+        Ok(Some(ConfigurationError::NotImplemented))
     }
 }
 
