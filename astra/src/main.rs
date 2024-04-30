@@ -304,7 +304,7 @@ async fn run_cargo_build_target_name(
 ) -> NumberOfErrors {
     run_cargo(
         &project,
-        &["build", "--verbose", "--target", &target_name],
+        &["build", "--verbose", "--release", "--target", &target_name],
         &HashMap::new(),
         error_reporter,
     )
@@ -333,7 +333,7 @@ async fn run_cargo_build_wasi_threads(
         .to_str()
         .expect("Tried to convert a path to a string");
     run_process_with_error_only_output(&project, std::path::Path::new(
-         "rustup"), &["run" ,"nightly", "cargo", "build","--verbose", "--target", target_name], &HashMap::from([
+         "rustup"), &["run" ,"nightly", "cargo", "build", "--verbose", "--release", "--target", target_name], &HashMap::from([
         ("CFLAGS".to_string(), "-pthread".to_string()),
         ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32", lib_dir_str)),
         (format!("CC_{}", target_name), clang_exe_str.to_string()),
