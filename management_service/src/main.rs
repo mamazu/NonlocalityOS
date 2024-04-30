@@ -504,6 +504,72 @@ fn handle_external_requests(
     }
 }
 
+fn run_services(order: &Order, repository: &std::path::Path) -> ExitCode {
+    let api_hub = Arc::new(InterServiceApiHub::new());
+    let exit_code = thread::scope(|s| {
+        let mut threads = Vec::new();
+        for wasi_process in &order.wasi_processes {
+            let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
+            println!("Starting thread for {}.", input_program_path.display());
+            let api_hub_2 = api_hub.clone();
+            let this_service_id = wasi_process.id;
+            let interfaces = Arc::new(wasi_process.interfaces.clone());
+            let handler = s.spawn(move || {
+                let mut config = Config::new();
+                config.wasm_threads(wasi_process.has_threads);
+                config.debug_info(true);
+                config.wasm_backtrace(true);
+                config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
+                let engine = match Engine::new(&config) {
+                    Ok(success) => success,
+                    Err(error) => {
+                        panic!("Could not create wasmtime engine: {}.", error)
+                    }
+                };
+                let module = match Module::from_file(&engine, &input_program_path) {
+                    Ok(module) => module,
+                    Err(error) => {
+                        println!(
+                            "Could not load {}, error: {}.",
+                            input_program_path.display(),
+                            error
+                        );
+                        todo!()
+                    }
+                };
+                run_wasi_process(
+                    engine,
+                    module,
+                    Logger {
+                        name: input_program_path.display().to_string(),
+                    },
+                    api_hub_2,
+                    wasi_process.has_threads,
+                    this_service_id,
+                    interfaces,
+                )
+            });
+            threads.push(handler);
+        }
+
+        let mut exit_code = ExitCode::SUCCESS;
+        for thread in threads {
+            println!("Waiting for a thread to complete.");
+            match thread.join().unwrap() {
+                Ok(_) => {}
+                Err(error) => {
+                    println!("One process failed with error: {}.", error);
+                    exit_code = ExitCode::FAILURE;
+                }
+            }
+        }
+
+        println!("All threads completed.");
+        exit_code
+    });
+    exit_code
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -628,68 +694,8 @@ async fn main() -> ExitCode {
         }
     });
 
-    let api_hub = Arc::new(InterServiceApiHub::new());
-    let exit_code = thread::scope(|s| {
-        let mut threads = Vec::new();
-        for wasi_process in order.wasi_processes {
-            let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
-            println!("Starting thread for {}.", input_program_path.display());
-            let api_hub_2 = api_hub.clone();
-            let this_service_id = wasi_process.id;
-            let interfaces = Arc::new(wasi_process.interfaces.clone());
-            let handler = s.spawn(move || {
-                let mut config = Config::new();
-                config.wasm_threads(wasi_process.has_threads);
-                config.debug_info(true);
-                config.wasm_backtrace(true);
-                config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
-                let engine = match Engine::new(&config) {
-                    Ok(success) => success,
-                    Err(error) => {
-                        panic!("Could not create wasmtime engine: {}.", error)
-                    }
-                };
-                let module = match Module::from_file(&engine, &input_program_path) {
-                    Ok(module) => module,
-                    Err(error) => {
-                        println!(
-                            "Could not load {}, error: {}.",
-                            input_program_path.display(),
-                            error
-                        );
-                        todo!()
-                    }
-                };
-                run_wasi_process(
-                    engine,
-                    module,
-                    Logger {
-                        name: input_program_path.display().to_string(),
-                    },
-                    api_hub_2,
-                    wasi_process.has_threads,
-                    this_service_id,
-                    interfaces,
-                )
-            });
-            threads.push(handler);
-        }
+    let exit_code = run_services(&order, &repository);
 
-        let mut exit_code = ExitCode::SUCCESS;
-        for thread in threads {
-            println!("Waiting for a thread to complete.");
-            match thread.join().unwrap() {
-                Ok(_) => {}
-                Err(error) => {
-                    println!("One process failed with error: {}.", error);
-                    exit_code = ExitCode::FAILURE;
-                }
-            }
-        }
-
-        println!("All threads completed.");
-        exit_code
-    });
     background_acceptor.await.unwrap();
     exit_code
 }
