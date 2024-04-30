@@ -1,10 +1,18 @@
 #![deny(warnings)]
 use async_recursion::async_recursion;
+use management_interface::Blob;
+use management_interface::IncomingInterface;
+use management_interface::IncomingInterfaceId;
+use management_interface::OutgoingInterfaceId;
+use management_interface::ServiceId;
+use management_interface::{ClusterConfiguration, Service, WasiProcess};
+use postcard::to_allocvec;
 use ssh2::OpenFlags;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::os::windows::fs::MetadataExt;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 pub mod downloads;
 
 #[derive(Clone)]
@@ -764,6 +772,99 @@ fn parse_command(input: &str) -> Option<AstraCommand> {
     }
 }
 
+async fn read_blob(from: &std::path::Path) -> Blob {
+    let mut file = tokio::fs::File::open(from).await.unwrap();
+    let mut contents = vec![];
+    file.read_to_end(&mut contents).await.unwrap();
+    Blob::Direct(contents)
+}
+
+async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterConfiguration {
+    ClusterConfiguration {
+        services: vec![
+            Service {
+                id: ServiceId(0),
+                outgoing_interfaces: BTreeMap::new(),
+                wasi: WasiProcess {
+                    code: read_blob(&target.join("wasm32-wasi/release/hello_rust.wasm")).await,
+                    has_threads: false,
+                },
+            },
+            Service {
+                id: ServiceId(1),
+                outgoing_interfaces: BTreeMap::new(),
+                wasi: WasiProcess {
+                    code: read_blob(
+                        &target.join("wasm32-wasip1-threads/release/essrpc_server.wasm"),
+                    )
+                    .await,
+                    has_threads: true,
+                },
+            },
+            Service {
+                id: ServiceId(2),
+                outgoing_interfaces: BTreeMap::from([(
+                    OutgoingInterfaceId(0),
+                    IncomingInterface::new(ServiceId(1), IncomingInterfaceId(0)),
+                )]),
+                wasi: WasiProcess {
+                    code: read_blob(&target.join("wasm32-wasi/release/essrpc_client.wasm")).await,
+                    has_threads: false,
+                },
+            },
+            Service {
+                id: ServiceId(3),
+                outgoing_interfaces: BTreeMap::new(),
+                wasi: WasiProcess {
+                    code: read_blob(&target.join("wasm32-wasi/release/provide_api.wasm")).await,
+                    has_threads: false,
+                },
+            },
+            Service {
+                id: ServiceId(4),
+                outgoing_interfaces: BTreeMap::from([(
+                    OutgoingInterfaceId(0),
+                    IncomingInterface::new(ServiceId(3), IncomingInterfaceId(0)),
+                )]),
+                wasi: WasiProcess {
+                    code: read_blob(&target.join("wasm32-wasi/release/call_api.wasm")).await,
+                    has_threads: false,
+                },
+            },
+            Service {
+                id: ServiceId(5),
+                outgoing_interfaces: BTreeMap::new(),
+                wasi: WasiProcess {
+                    code: read_blob(
+                        &target.join("wasm32-wasip1-threads/release/database_server.wasm"),
+                    )
+                    .await,
+                    has_threads: true,
+                },
+            },
+            Service {
+                id: ServiceId(6),
+                outgoing_interfaces: BTreeMap::from([(
+                    OutgoingInterfaceId(0),
+                    IncomingInterface::new(ServiceId(5), IncomingInterfaceId(0)),
+                )]),
+                wasi: WasiProcess {
+                    code: read_blob(&target.join("wasm32-wasi/release/database_client.wasm")).await,
+                    has_threads: false,
+                },
+            },
+            Service {
+                id: ServiceId(7),
+                outgoing_interfaces: BTreeMap::new(),
+                wasi: WasiProcess {
+                    code: read_blob(&target.join("wasm32-wasi/release/idle_service.wasm")).await,
+                    has_threads: false,
+                },
+            },
+        ],
+    }
+}
+
 async fn build(
     mode: CargoBuildMode,
     repository: &std::path::Path,
@@ -897,7 +998,17 @@ async fn build(
     .await;
 
     match mode {
-        CargoBuildMode::BuildRelease => {}
+        CargoBuildMode::BuildRelease => {
+            let configuration =
+                compile_cluster_configuration(&repository.join("example_applications/rust/target"))
+                    .await;
+            let configuration_serialized = to_allocvec(&configuration).unwrap();
+            let target = repository.join("target");
+            let output_path = target.join("example_applications_cluster.config");
+            tokio::fs::write(&output_path, &configuration_serialized[..])
+                .await
+                .unwrap();
+        }
         CargoBuildMode::Test => {
             let coverage_report_directory = coverage_directory.join("report");
             error_count += delete_directory(&coverage_report_directory);
