@@ -1,7 +1,9 @@
 #![deny(warnings)]
 use async_recursion::async_recursion;
+use ssh2::OpenFlags;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
+use std::os::windows::fs::MetadataExt;
 use std::sync::Arc;
 pub mod downloads;
 
@@ -382,7 +384,7 @@ async fn build_and_test_program(
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
-    command: AstraCommand,
+    mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut tasks = Vec::new();
 
@@ -392,8 +394,8 @@ async fn build_and_test_program(
         run_cargo_fmt(&where_in_filesystem_clone, &error_reporter_clone).await
     }));
 
-    match command {
-        AstraCommand::Build => {
+    match mode {
+        CargoBuildMode::BuildRelease => {
             for target in &program.targets {
                 let target_clone = target.clone();
                 let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
@@ -408,7 +410,7 @@ async fn build_and_test_program(
                 }));
             }
         }
-        AstraCommand::Test => {
+        CargoBuildMode::Test => {
             let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
             let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
             let error_reporter_clone = error_reporter.clone();
@@ -431,7 +433,7 @@ async fn build_and_test_directory_entry(
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     error_reporter: Arc<dyn ReportError + Sync + Send>,
-    command: AstraCommand,
+    mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
     match directory_entry {
@@ -441,7 +443,7 @@ async fn build_and_test_directory_entry(
                 &where_in_filesystem,
                 coverage_info_directory,
                 &error_reporter,
-                command,
+                mode,
             )
             .await;
         }
@@ -451,7 +453,7 @@ async fn build_and_test_directory_entry(
                 &where_in_filesystem,
                 coverage_info_directory,
                 &error_reporter,
-                command,
+                mode,
             )
             .await;
         }
@@ -484,7 +486,7 @@ async fn build_and_test_recursively(
     where_in_filesystem: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
-    command: AstraCommand,
+    mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut tasks = Vec::new();
     for entry in &description.entries {
@@ -492,14 +494,14 @@ async fn build_and_test_recursively(
         let directory_entry = entry.1.clone();
         let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
         let error_reporter_clone = error_reporter.clone();
-        let command_clone = command.clone();
+        let mode_clone = mode.clone();
         tasks.push(tokio::spawn(async move {
             build_and_test_directory_entry(
                 &directory_entry,
                 &subdirectory,
                 &coverage_info_directory_clone,
                 error_reporter_clone,
-                command_clone,
+                mode_clone,
             )
             .await
         }));
@@ -739,46 +741,37 @@ impl ReportError for ConsoleErrorReporter {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum AstraCommand {
-    Build,
+enum CargoBuildMode {
+    BuildRelease,
     Test,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AstraCommand {
+    Build(CargoBuildMode),
+    Deploy,
 }
 
 fn parse_command(input: &str) -> Option<AstraCommand> {
     match input {
-        "build" => Some(AstraCommand::Build),
-        "test" => Some(AstraCommand::Test),
+        "build" => Some(AstraCommand::Build(CargoBuildMode::BuildRelease)),
+        "test" => Some(AstraCommand::Build(CargoBuildMode::Test)),
+        "deploy" => Some(AstraCommand::Deploy),
         _ => None,
     }
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> std::process::ExitCode {
-    let started_at = std::time::Instant::now();
-    let command_line_arguments: Vec<String> = std::env::args().collect();
-    if command_line_arguments.len() != 3 {
-        println!(
-            "Two command line arguments required: [Path to the root of the repository] test|build"
-        );
-        return std::process::ExitCode::FAILURE;
-    }
-    let repository = std::path::Path::new(&command_line_arguments[1]);
-    let command_input = &command_line_arguments[2];
-    let command = match parse_command(command_input) {
-        Some(success) => success,
-        None => {
-            println!("Unknown command: {}", command_input);
-            return std::process::ExitCode::FAILURE;
-        }
-    };
-    println!("Command: {:?}", &command);
-    let error_reporter: Arc<dyn ReportError + Send + Sync> = Arc::new(ConsoleErrorReporter {});
+async fn build(
+    mode: CargoBuildMode,
+    repository: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
     let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) =
         install_tools(repository, &error_reporter).await;
 
-    match command {
-        AstraCommand::Build => {}
-        AstraCommand::Test => {
+    match mode {
+        CargoBuildMode::BuildRelease => {}
+        CargoBuildMode::Test => {
             error_count += install_grcov(repository, &error_reporter).await;
             error_count += install_llvm_tools_preview(repository, &error_reporter).await;
         }
@@ -875,7 +868,7 @@ async fn main() -> std::process::ExitCode {
                 DirectoryEntry::Program(Program::other()),
             ),
             (
-                "management_service".to_string(),
+                MANAGEMENT_SERVICE_NAME.to_string(),
                 DirectoryEntry::Program(match maybe_raspberry_pi {
                     Some(raspberry_pi) => Program::host_and_pi(raspberry_pi),
                     None => Program::host(),
@@ -896,13 +889,13 @@ async fn main() -> std::process::ExitCode {
         &repository,
         &coverage_info_directory,
         &error_reporter,
-        command,
+        mode,
     )
     .await;
 
-    match command {
-        AstraCommand::Build => {}
-        AstraCommand::Test => {
+    match mode {
+        CargoBuildMode::BuildRelease => {}
+        CargoBuildMode::Test => {
             let coverage_report_directory = coverage_directory.join("report");
             error_count += generate_coverage_report_with_grcov(
                 &repository,
@@ -913,9 +906,144 @@ async fn main() -> std::process::ExitCode {
             .await;
         }
     }
+    error_count
+}
+
+const MANAGEMENT_SERVICE_NAME: &str = "management_service";
+
+fn to_std_path(linux_path: &relative_path::RelativePath) -> std::path::PathBuf {
+    linux_path.to_path(std::path::Path::new("/"))
+}
+
+async fn deploy(
+    repository: &std::path::Path,
+    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+) -> NumberOfErrors {
+    dotenv::dotenv().ok();
+    let ssh_endpoint = std::env::var("ASTRA_DEPLOY_SSH_ENDPOINT")
+        .expect("Tried to read env variable ASTRA_DEPLOY_SSH_ENDPOINT");
+    let ssh_user = std::env::var("ASTRA_DEPLOY_SSH_USER")
+        .expect("Tried to read env variable ASTRA_DEPLOY_SSH_USER");
+    let ssh_password = std::env::var("ASTRA_DEPLOY_SSH_PASSWORD")
+        .expect("Tried to read env variable ASTRA_DEPLOY_SSH_PASSWORD");
+
+    let tcp = std::net::TcpStream::connect(&ssh_endpoint).unwrap();
+    let mut session = ssh2::Session::new().unwrap();
+    session.set_tcp_stream(tcp);
+    match session.handshake() {
+        Ok(_) => {}
+        Err(error) => error_reporter.report(&format!("Could not SSH handshake: {}", error)),
+    }
+    session.userauth_password(&ssh_user, &ssh_password).unwrap();
+    assert!(session.authenticated());
+
+    let binary = repository
+        .join("target")
+        .join(RASPBERRY_PI_TARGET_NAME)
+        .join("release")
+        .join(MANAGEMENT_SERVICE_NAME);
+    let mut file_to_upload =
+        std::fs::File::open(&binary).expect("Tried to open the binary to upload");
+    let file_size = file_to_upload
+        .metadata()
+        .expect("Tried to determine the file size")
+        .file_size();
+    println!("Uploading file with {} bytes", file_size);
+
+    let sftp = session.sftp().expect("Tried to open SFTP");
+    let home = relative_path::RelativePath::new("/home").join(ssh_user);
+    let home_found = sftp
+        .stat(&to_std_path(&home))
+        .expect("Tried to stat home on the remote");
+    if !home_found.is_dir() {
+        error_reporter.report(&format!("Expected a directory at remote location {}", home));
+        return NumberOfErrors(1);
+    }
+
+    let nonlocality_dir = home.join(".nonlocality");
+    match sftp.stat(&to_std_path(&nonlocality_dir)) {
+        Ok(exists) => {
+            if exists.is_dir() {
+                println!("Our directory appears to exist.");
+            } else {
+                error_reporter.report(&format!("Our directory is a file!"));
+                return NumberOfErrors(1);
+            }
+        }
+        Err(error) => {
+            println!("Could not stat our directory: {}", error);
+            println!("Creating directory {}", nonlocality_dir);
+            sftp.mkdir(&to_std_path(&nonlocality_dir), 0o755)
+                .expect("Tried to create our directory on the remote");
+        }
+    }
+
+    let remote_management_service_binary = nonlocality_dir.join(MANAGEMENT_SERVICE_NAME);
+    let mut file_uploader = sftp
+        .open_mode(
+            &to_std_path(&remote_management_service_binary),
+            OpenFlags::WRITE | OpenFlags::TRUNCATE,
+            0o755,
+            ssh2::OpenType::File,
+        )
+        .expect("Tried to create binary on the remote");
+    std::io::copy(&mut file_to_upload, &mut file_uploader)
+        .expect("Tried to upload the file contents");
+    std::io::Write::flush(&mut file_uploader).expect("Tried to flush file uploader");
+    drop(file_uploader);
+
+    let mut channel = session.channel_session().unwrap();
+    channel
+        .exec(&format!("file {}", remote_management_service_binary))
+        .unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut channel, &mut s).unwrap();
+    println!("{}", s);
+    channel.wait_close().expect("Waited for close");
+    assert_eq!(0, channel.exit_status().unwrap());
+
+    let mut channel = session.channel_session().unwrap();
+    channel
+        .exec(&format!("{}", remote_management_service_binary))
+        .unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut channel, &mut s).unwrap();
+    println!("{}", s);
+    channel.wait_close().expect("Waited for close");
+    assert_eq!(101, channel.exit_status().unwrap());
+
+    NumberOfErrors(0)
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> std::process::ExitCode {
+    let started_at = std::time::Instant::now();
+    let command_line_arguments: Vec<String> = std::env::args().collect();
+    if command_line_arguments.len() != 3 {
+        println!(
+            "Two command line arguments required: [Path to the root of the repository] test|build"
+        );
+        return std::process::ExitCode::FAILURE;
+    }
+    let repository = std::path::Path::new(&command_line_arguments[1]);
+    let command_input = &command_line_arguments[2];
+    let command = match parse_command(command_input) {
+        Some(success) => success,
+        None => {
+            println!("Unknown command: {}", command_input);
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    println!("Command: {:?}", &command);
+    let error_reporter: Arc<dyn ReportError + Send + Sync> = Arc::new(ConsoleErrorReporter {});
+
+    let error_count = match command {
+        AstraCommand::Build(mode) => build(mode, &repository, &error_reporter).await,
+        AstraCommand::Deploy => deploy(&repository, &error_reporter).await,
+    };
 
     let build_duration = started_at.elapsed();
-    println!("Build duration: {:?}", build_duration);
+    println!("Duration: {:?}", build_duration);
 
     match error_count.0 {
         0 => std::process::ExitCode::SUCCESS,

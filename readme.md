@@ -8,11 +8,20 @@
 * run `test.bat`
 * on success it will print `Success!` in the end
 
+# Deploy
+
+* successfully run `.\build.bat`
+* install Raspberry Pi OS 64-bit and enable SSH with password
+* copy `.env.template` as `.env`
+* edit `.env` with values for your Raspberry Pi!
+* run `.\astra.bat deploy`
+* enjoy
+
 # Formatting code
 
 ## Windows
 
-* run `test.bat`
+* run `test.bat` or `build.bat`
 
 ## Visual Studio Code
 
