@@ -557,6 +557,39 @@ fn run_services(order: &Order, repository: &std::path::Path) -> ExitCode {
     exit_code
 }
 
+async fn run_api_server(external_port_listener:tokio::net::TcpListener) {
+    let (request_shutdown, mut shutdown_requested) = tokio::sync::mpsc::channel::<()>(1);
+    loop {
+        tokio::select! {
+            maybe_accepted = external_port_listener.accept() => match maybe_accepted{
+                Ok(incoming_connection) => {
+                    println!(
+                        "Accepted external API connection from {}.",
+                        incoming_connection.1
+                    );
+                    let request_shutdown_clone = request_shutdown.clone();
+                    tokio::task::spawn_blocking(move || {
+                        handle_external_requests(incoming_connection.0, request_shutdown_clone);
+                    });
+                }
+                Err(error) => {
+                    println!("Accept failed with {}.", error);
+                    break;
+                }
+            },
+            maybe_received = shutdown_requested.recv() => {
+                match maybe_received {
+                    Some(_) => {
+                        println!("Not accepting external connections anymore.");
+                        break;
+                    },
+                    None => unreachable!("The sender remains on the stack, so the channel will never be closed."),
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -648,41 +681,8 @@ async fn main() -> ExitCode {
         ],
     };
 
-    let (request_shutdown, mut shutdown_requested) = tokio::sync::mpsc::channel::<()>(1);
-    let background_acceptor = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                maybe_accepted = external_port_listener.accept() => match maybe_accepted{
-                    Ok(incoming_connection) => {
-                        println!(
-                            "Accepted external API connection from {}.",
-                            incoming_connection.1
-                        );
-                        let request_shutdown_clone = request_shutdown.clone();
-                        tokio::task::spawn_blocking(move || {
-                            handle_external_requests(incoming_connection.0, request_shutdown_clone);
-                        });
-                    }
-                    Err(error) => {
-                        println!("Accept failed with {}.", error);
-                        break;
-                    }
-                },
-                maybe_received = shutdown_requested.recv() => {
-                    match maybe_received {
-                        Some(_) => {
-                            println!("Not accepting external connections anymore.");
-                            break;
-                        },
-                        None => unreachable!("The sender remains on the stack, so the channel will never be closed."),
-                    }
-                }
-            }
-        }
-    });
-
+    let background_acceptor = tokio::spawn(run_api_server(external_port_listener));
     let exit_code = run_services(&order, &repository);
-
     background_acceptor.await.unwrap();
     exit_code
 }
