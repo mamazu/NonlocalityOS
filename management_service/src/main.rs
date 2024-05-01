@@ -15,9 +15,7 @@ use management_interface::ServiceId;
 use normalize_path::NormalizePath;
 use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
-use relative_path::RelativePathBuf;
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::env;
 use std::fmt;
@@ -35,17 +33,6 @@ use wasi_common::{WasiCtx, WasiFile};
 use wasmtime::Config;
 use wasmtime::{Caller, Engine, Linker, Module, Store};
 use wasmtime_wasi_threads::WasiThreadsCtx;
-
-struct WasiProcess {
-    web_assembly_file: RelativePathBuf,
-    has_threads: bool,
-    id: ServiceId,
-    interfaces: BTreeMap<OutgoingInterfaceId, IncomingInterface>,
-}
-
-struct Order {
-    wasi_processes: Vec<WasiProcess>,
-}
 
 struct Logger {
     name: String,
@@ -490,19 +477,22 @@ fn handle_external_requests(
     }
 }
 
-fn run_services(order: &Order, repository: &std::path::Path) -> ExitCode {
+fn run_services(configuration: &ClusterConfiguration) -> ExitCode {
     let api_hub = Arc::new(InterServiceApiHub::new());
     let exit_code = thread::scope(|s| {
         let mut threads = Vec::new();
-        for wasi_process in &order.wasi_processes {
-            let input_program_path = wasi_process.web_assembly_file.to_path(&repository);
-            println!("Starting thread for {}.", input_program_path.display());
+        for service in &configuration.services {
+            println!("Starting thread for service {:?}.", service.id);
             let api_hub_2 = api_hub.clone();
-            let this_service_id = wasi_process.id;
-            let interfaces = Arc::new(wasi_process.interfaces.clone());
+            let this_service_id = service.id;
+            let interfaces = Arc::new(service.outgoing_interfaces.clone());
+            let wasm_code = match &service.wasi.code {
+                management_interface::Blob::Digest(_) => todo!(),
+                management_interface::Blob::Direct(content) => content.clone(),
+            };
             let handler = s.spawn(move || {
                 let mut config = Config::new();
-                config.wasm_threads(wasi_process.has_threads);
+                config.wasm_threads(service.wasi.has_threads);
                 config.debug_info(true);
                 config.wasm_backtrace(true);
                 config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
@@ -512,13 +502,12 @@ fn run_services(order: &Order, repository: &std::path::Path) -> ExitCode {
                         panic!("Could not create wasmtime engine: {}.", error)
                     }
                 };
-                let module = match Module::from_file(&engine, &input_program_path) {
+                let module = match Module::from_binary(&engine, &wasm_code[..]) {
                     Ok(module) => module,
                     Err(error) => {
                         println!(
-                            "Could not load {}, error: {}.",
-                            input_program_path.display(),
-                            error
+                            "Could not load wasm for service {:?}, error: {}.",
+                            service.id, error
                         );
                         todo!()
                     }
@@ -527,10 +516,10 @@ fn run_services(order: &Order, repository: &std::path::Path) -> ExitCode {
                     engine,
                     module,
                     Logger {
-                        name: input_program_path.display().to_string(),
+                        name: format!("Service#{:?}", service.id),
                     },
                     api_hub_2,
-                    wasi_process.has_threads,
+                    service.wasi.has_threads,
                     this_service_id,
                     interfaces,
                 )
@@ -602,86 +591,13 @@ async fn main() -> ExitCode {
         }
     };
 
-    let repository = Path::new(&args[1]).normalize();
-    let order = Order {
-        wasi_processes: vec![
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasi/release/hello_rust.wasm",
-                )
-                .unwrap(),
-                has_threads: false,
-               id:   ServiceId(0),
-               interfaces: BTreeMap::new(),
-            },
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasip1-threads/release/essrpc_server.wasm",
-                )
-                .unwrap(),
-                has_threads: true,
-                id:   ServiceId(1),
-                interfaces: BTreeMap::new(),
-            },
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasi/release/essrpc_client.wasm",
-                )
-                .unwrap(),
-                has_threads: false,
-                id:   ServiceId(2),
-                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), IncomingInterface::new(ServiceId(1), IncomingInterfaceId(0)))] ),
-            },
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasi/release/provide_api.wasm",
-                )
-                .unwrap(),
-                has_threads: false,
-                id:   ServiceId(3),
-                interfaces: BTreeMap::new(),
-            },
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasi/release/call_api.wasm",
-                )
-                .unwrap(),
-                has_threads: false,
-                id:   ServiceId(4),
-                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), IncomingInterface::new(ServiceId(3), IncomingInterfaceId(0)))] ),
-            },
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasip1-threads/release/database_server.wasm",
-                )
-                .unwrap(),
-                has_threads: true,
-                id:   ServiceId(5),
-                interfaces: BTreeMap::new(),
-            },
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasi/release/database_client.wasm",
-                )
-                .unwrap(),
-                has_threads: false,
-                id:   ServiceId(6),
-                interfaces: BTreeMap::from([( OutgoingInterfaceId(0), IncomingInterface::new(ServiceId(5), IncomingInterfaceId(0)))] ),
-            },
-            WasiProcess {
-                web_assembly_file: RelativePathBuf::from_path(
-                    "example_applications/rust/target/wasm32-wasi/release/idle_service.wasm",
-                )
-                .unwrap(),
-                has_threads: false,
-                id: ServiceId(7),
-                interfaces: BTreeMap::new(),
-            }
-        ],
-    };
-
+    let cluster_configuration_file_path = Path::new(&args[1]).normalize();
+    let cluster_configuration_content = tokio::fs::read(&cluster_configuration_file_path)
+        .await
+        .unwrap();
+    let cluster_configuration = postcard::from_bytes(&cluster_configuration_content[..]).unwrap();
     let background_acceptor = tokio::spawn(run_api_server(external_port_listener));
-    let exit_code = run_services(&order, &repository);
+    let exit_code = run_services(&cluster_configuration);
     background_acceptor.await.unwrap();
     exit_code
 }
