@@ -1117,6 +1117,7 @@ async fn deploy(
     channel.wait_close().expect("Waited for close");
     assert_eq!(0, channel.exit_status().unwrap());
 
+    println!("Starting {}", &remote_management_service_binary);
     let mut channel = session.channel_session().unwrap();
     channel
         .exec(&format!("{}", remote_management_service_binary))

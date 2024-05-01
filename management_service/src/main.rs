@@ -12,7 +12,6 @@ use management_interface::ManagementInterface;
 use management_interface::ManagementInterfaceRPCServer;
 use management_interface::OutgoingInterfaceId;
 use management_interface::ServiceId;
-use normalize_path::NormalizePath;
 use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
 use std::any::Any;
@@ -591,7 +590,11 @@ async fn main() -> ExitCode {
         }
     };
 
-    let cluster_configuration_file_path = Path::new(&args[1]).normalize();
+    let cluster_configuration_file_path = Path::new(&args[1]);
+    println!(
+        "Loading configuration from {}",
+        cluster_configuration_file_path.display()
+    );
     let cluster_configuration_content = tokio::fs::read(&cluster_configuration_file_path)
         .await
         .unwrap();
