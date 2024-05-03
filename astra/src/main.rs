@@ -341,7 +341,7 @@ async fn run_cargo_build_wasi_threads(
         .to_str()
         .expect("Tried to convert a path to a string");
     run_process_with_error_only_output(&project, std::path::Path::new(
-         "rustup"), &["run" ,"nightly", "cargo", "build", "--verbose", "--release", "--target", target_name], &HashMap::from([
+         "cargo"), &["build", "--verbose", "--release", "--target", target_name], &HashMap::from([
         ("CFLAGS".to_string(), "-pthread".to_string()),
         ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32", lib_dir_str)),
         (format!("CC_{}", target_name), clang_exe_str.to_string()),
@@ -586,59 +586,6 @@ async fn install_wasi_cpp_compiler(
     }
 }
 
-const RUSTUP_EXECUTABLE: &str = "rustup";
-
-async fn install_rust_target(
-    working_directory: &std::path::Path,
-    target_name: &str,
-    channel: &str,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
-) -> NumberOfErrors {
-    run_process_with_error_only_output(
-        working_directory,
-        std::path::Path::new(RUSTUP_EXECUTABLE),
-        &["target", "add", &target_name, "--toolchain", &channel],
-        &HashMap::new(),
-        error_reporter,
-    )
-    .await
-}
-
-async fn install_rust_targets(
-    working_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
-) -> NumberOfErrors {
-    install_rust_target(
-        working_directory,
-        RASPBERRY_PI_TARGET_NAME,
-        "stable",
-        error_reporter,
-    )
-    .await
-        + install_rust_target(working_directory, "wasm32-wasi", "stable", error_reporter).await
-        + install_rust_target(
-            working_directory,
-            "wasm32-wasip1-threads",
-            "nightly",
-            error_reporter,
-        )
-        .await
-}
-
-async fn install_rust_toolchain(
-    working_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
-) -> NumberOfErrors {
-    run_process_with_error_only_output(
-        working_directory,
-        std::path::Path::new(RUSTUP_EXECUTABLE),
-        &["toolchain", "install", "nightly-x86_64-pc-windows-msvc"],
-        &HashMap::new(),
-        error_reporter,
-    )
-    .await
-}
-
 async fn install_tools(
     repository: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
@@ -652,14 +599,7 @@ async fn install_tools(
         install_raspberry_pi_cpp_compiler(&tools_directory, error_reporter).await;
     let (error_count_2, wasi_threads) =
         install_wasi_cpp_compiler(&tools_directory, error_reporter).await;
-    (
-        error_count_1
-            + error_count_2
-            + install_rust_targets(&repository, error_reporter).await
-            + install_rust_toolchain(&repository, error_reporter).await,
-        raspberry_pi,
-        wasi_threads,
-    )
+    (error_count_1 + error_count_2, raspberry_pi, wasi_threads)
 }
 
 async fn install_grcov(
