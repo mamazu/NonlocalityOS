@@ -476,9 +476,9 @@ fn handle_external_requests(
     }
 }
 
-fn run_services(configuration: &ClusterConfiguration) -> ExitCode {
+fn run_services(configuration: &ClusterConfiguration) -> bool {
     let api_hub = Arc::new(InterServiceApiHub::new());
-    let exit_code = thread::scope(|s| {
+    let is_success = thread::scope(|s| {
         let mut threads = Vec::new();
         for service in &configuration.services {
             println!("Starting thread for service {:?}.", service.id);
@@ -526,22 +526,31 @@ fn run_services(configuration: &ClusterConfiguration) -> ExitCode {
             threads.push(handler);
         }
 
-        let mut exit_code = ExitCode::SUCCESS;
+        let mut is_success = true;
         for thread in threads {
             println!("Waiting for a thread to complete.");
             match thread.join().unwrap() {
                 Ok(_) => {}
                 Err(error) => {
                     println!("One process failed with error: {}.", error);
-                    exit_code = ExitCode::FAILURE;
+                    is_success = false;
                 }
             }
         }
 
         println!("All threads completed.");
-        exit_code
+        is_success
     });
-    exit_code
+    is_success
+}
+
+#[test]
+fn test_run_services_empty_cluster() {
+    let cluster_configuration = ClusterConfiguration {
+        services: Vec::new(),
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(is_success);
 }
 
 async fn run_api_server(external_port_listener: tokio::net::TcpListener) {
@@ -600,7 +609,11 @@ async fn main() -> ExitCode {
         .unwrap();
     let cluster_configuration = postcard::from_bytes(&cluster_configuration_content[..]).unwrap();
     let background_acceptor = tokio::spawn(run_api_server(external_port_listener));
-    let exit_code = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration);
     background_acceptor.await.unwrap();
-    exit_code
+    if is_success {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
