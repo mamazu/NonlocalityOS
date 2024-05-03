@@ -615,20 +615,6 @@ async fn install_grcov(
     .await
 }
 
-async fn install_llvm_tools_preview(
-    working_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
-) -> NumberOfErrors {
-    run_process_with_error_only_output(
-        &working_directory,
-        std::path::Path::new("rustup"),
-        &["component", "add", "llvm-tools-preview"],
-        &HashMap::new(),
-        error_reporter,
-    )
-    .await
-}
-
 async fn generate_coverage_report_with_grcov(
     repository: &std::path::Path,
     coverage_info_directory: &std::path::Path,
@@ -817,7 +803,6 @@ async fn build(
         CargoBuildMode::BuildRelease => {}
         CargoBuildMode::Test => {
             error_count += install_grcov(repository, &error_reporter).await;
-            error_count += install_llvm_tools_preview(repository, &error_reporter).await;
         }
     }
 
