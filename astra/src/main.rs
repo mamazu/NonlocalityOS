@@ -140,22 +140,22 @@ async fn run_process_with_error_only_output(
         return NumberOfErrors(0);
     }
     let mut error_message = String::from("");
-    write!(error_message, "Executable: {}", executable.display()).unwrap();
-    write!(error_message, "Arguments: {}", arguments.join(" ")).unwrap();
-    write!(error_message, "Environment: {:?}", &environment_variables).unwrap();
-    write!(
+    writeln!(error_message, "Executable: {}", executable.display()).unwrap();
+    writeln!(error_message, "Arguments: {}", arguments.join(" ")).unwrap();
+    writeln!(error_message, "Environment: {:?}", &environment_variables).unwrap();
+    writeln!(
         error_message,
         "Working directory: {}",
         working_directory.display()
     )
     .unwrap();
-    write!(error_message, "Exit status: {}", output.status).unwrap();
-    write!(error_message, "Standard output:").unwrap();
+    writeln!(error_message, "Exit status: {}", output.status).unwrap();
+    writeln!(error_message, "Standard output:").unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    write!(error_message, "{}", &stdout).unwrap();
-    write!(error_message, "Standard error:").unwrap();
+    writeln!(error_message, "{}", &stdout).unwrap();
+    writeln!(error_message, "Standard error:").unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    write!(error_message, "{}", &stderr).unwrap();
+    writeln!(error_message, "{}", &stderr).unwrap();
     error_reporter.report(&error_message);
     NumberOfErrors(1)
 }
@@ -387,10 +387,9 @@ async fn run_cargo_build(
     }
 }
 
-async fn build_and_test_program(
+async fn build_program(
     program: &Program,
     where_in_filesystem: &std::path::Path,
-    coverage_info_directory: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
     mode: CargoBuildMode,
 ) -> NumberOfErrors {
@@ -418,52 +417,27 @@ async fn build_and_test_program(
                 }));
             }
         }
-        CargoBuildMode::Test => {
-            let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
-            let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
-            let error_reporter_clone = error_reporter.clone();
-            tasks.push(tokio::spawn(async move {
-                run_cargo_test(
-                    &where_in_filesystem_clone,
-                    &coverage_info_directory_clone,
-                    &error_reporter_clone,
-                )
-                .await
-            }));
-        }
+        CargoBuildMode::Test => {}
     }
     join_all(tasks, error_reporter).await
 }
 
 #[async_recursion]
-async fn build_and_test_directory_entry(
+async fn build_directory_entry(
     directory_entry: &DirectoryEntry,
     where_in_filesystem: &std::path::Path,
-    coverage_info_directory: &std::path::Path,
     error_reporter: Arc<dyn ReportError + Sync + Send>,
     mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
     match directory_entry {
         DirectoryEntry::Program(program) => {
-            error_count += build_and_test_program(
-                &program,
-                &where_in_filesystem,
-                coverage_info_directory,
-                &error_reporter,
-                mode,
-            )
-            .await;
+            error_count +=
+                build_program(&program, &where_in_filesystem, &error_reporter, mode).await;
         }
         DirectoryEntry::Directory(directory) => {
-            error_count += build_and_test_recursively(
-                &directory,
-                &where_in_filesystem,
-                coverage_info_directory,
-                &error_reporter,
-                mode,
-            )
-            .await;
+            error_count +=
+                build_recursively(&directory, &where_in_filesystem, &error_reporter, mode).await;
         }
     }
     error_count
@@ -489,10 +463,9 @@ async fn join_all(
 }
 
 #[async_recursion]
-async fn build_and_test_recursively(
+async fn build_recursively(
     description: &Directory,
     where_in_filesystem: &std::path::Path,
-    coverage_info_directory: &std::path::Path,
     error_reporter: &Arc<dyn ReportError + Sync + Send>,
     mode: CargoBuildMode,
 ) -> NumberOfErrors {
@@ -500,14 +473,12 @@ async fn build_and_test_recursively(
     for entry in &description.entries {
         let subdirectory = where_in_filesystem.join(entry.0);
         let directory_entry = entry.1.clone();
-        let coverage_info_directory_clone = coverage_info_directory.to_path_buf();
         let error_reporter_clone = error_reporter.clone();
         let mode_clone = mode.clone();
         tasks.push(tokio::spawn(async move {
-            build_and_test_directory_entry(
+            build_directory_entry(
                 &directory_entry,
                 &subdirectory,
-                &coverage_info_directory_clone,
                 error_reporter_clone,
                 mode_clone,
             )
@@ -799,10 +770,16 @@ async fn build(
     let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) =
         install_tools(repository, &error_reporter).await;
 
+    let coverage_directory = repository.join("coverage");
+    let coverage_info_directory = coverage_directory.join("info");
+    error_count += delete_directory(&coverage_info_directory);
+
     match mode {
         CargoBuildMode::BuildRelease => {}
         CargoBuildMode::Test => {
             error_count += install_grcov(repository, &error_reporter).await;
+            error_count +=
+                run_cargo_test(&repository, &coverage_info_directory, &error_reporter).await;
         }
     }
 
@@ -910,17 +887,7 @@ async fn build(
         ]),
     };
 
-    let coverage_directory = repository.join("coverage");
-    let coverage_info_directory = coverage_directory.join("info");
-    error_count += delete_directory(&coverage_info_directory);
-    error_count += build_and_test_recursively(
-        &root,
-        &repository,
-        &coverage_info_directory,
-        &error_reporter,
-        mode,
-    )
-    .await;
+    error_count += build_recursively(&root, &repository, &error_reporter, mode).await;
 
     match mode {
         CargoBuildMode::BuildRelease => {
