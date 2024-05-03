@@ -92,8 +92,8 @@ impl std::ops::Add<NumberOfErrors> for NumberOfErrors {
     }
 }
 
-trait ReportError {
-    fn report(&self, error_message: &str);
+trait ReportProgress {
+    fn log(&self, message: &str);
 }
 
 impl std::ops::AddAssign for NumberOfErrors {
@@ -107,7 +107,7 @@ async fn run_process_with_error_only_output(
     executable: &std::path::Path,
     arguments: &[&str],
     environment_variables: &HashMap<String, String>,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     /*println!(
         "{}> {} {}",
@@ -136,27 +136,27 @@ async fn run_process_with_error_only_output(
             return NumberOfErrors(1);
         }
     };
-    if output.status.success() {
-        return NumberOfErrors(0);
-    }
-    let mut error_message = String::from("");
-    writeln!(error_message, "Executable: {}", executable.display()).unwrap();
-    writeln!(error_message, "Arguments: {}", arguments.join(" ")).unwrap();
-    writeln!(error_message, "Environment: {:?}", &environment_variables).unwrap();
+    let mut message = String::from("");
+    writeln!(message, "Executable: {}", executable.display()).unwrap();
+    writeln!(message, "Arguments: {}", arguments.join(" ")).unwrap();
+    writeln!(message, "Environment: {:?}", &environment_variables).unwrap();
     writeln!(
-        error_message,
+        message,
         "Working directory: {}",
         working_directory.display()
     )
     .unwrap();
-    writeln!(error_message, "Exit status: {}", output.status).unwrap();
-    writeln!(error_message, "Standard output:").unwrap();
+    writeln!(message, "Exit status: {}", output.status).unwrap();
+    writeln!(message, "Standard output:").unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    writeln!(error_message, "{}", &stdout).unwrap();
-    writeln!(error_message, "Standard error:").unwrap();
+    writeln!(message, "{}", &stdout).unwrap();
+    writeln!(message, "Standard error:").unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    writeln!(error_message, "{}", &stderr).unwrap();
-    error_reporter.report(&error_message);
+    writeln!(message, "{}", &stderr).unwrap();
+    progress_reporter.log(&message);
+    if output.status.success() {
+        return NumberOfErrors(0);
+    }
     NumberOfErrors(1)
 }
 
@@ -164,29 +164,29 @@ async fn run_cargo(
     working_directory: &std::path::Path,
     arguments: &[&str],
     environment_variables: &HashMap<String, String>,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
         &working_directory,
         std::path::Path::new("cargo"),
         &arguments,
         &environment_variables,
-        error_reporter,
+        progress_reporter,
     )
     .await
 }
 
 async fn run_cargo_fmt(
     project: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
-    run_cargo(&project, &["fmt"], &HashMap::new(), error_reporter).await
+    run_cargo(&project, &["fmt"], &HashMap::new(), progress_reporter).await
 }
 
 async fn run_cargo_test(
     project: &std::path::Path,
     coverage_info_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     let coverage_info_directory_str = coverage_info_directory
         .to_str()
@@ -201,7 +201,7 @@ async fn run_cargo_test(
                 format!("{}/cargo-test-%p-%m.profraw", coverage_info_directory_str),
             ),
         ]),
-        error_reporter,
+        progress_reporter,
     )
     .await
 }
@@ -259,7 +259,7 @@ fn confirm_directory(path: &std::path::Path) -> bool {
 async fn run_cargo_build_for_raspberry_pi(
     project: &std::path::Path,
     compiler_installation: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     let target_name = RASPBERRY_PI_TARGET_NAME;
     let bin = compiler_installation.join("bin");
@@ -300,7 +300,7 @@ async fn run_cargo_build_for_raspberry_pi(
             "--release",
         ],
         &environment_variables,
-        error_reporter,
+        progress_reporter,
     )
     .await
 }
@@ -308,13 +308,13 @@ async fn run_cargo_build_for_raspberry_pi(
 async fn run_cargo_build_target_name(
     project: &std::path::Path,
     target_name: &str,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_cargo(
         &project,
         &["build", "--verbose", "--release", "--target", &target_name],
         &HashMap::new(),
-        error_reporter,
+        progress_reporter,
     )
     .await
 }
@@ -323,7 +323,7 @@ async fn run_cargo_build_wasi_threads(
     project: &std::path::Path,
     wasi_sdk: &std::path::Path,
     target_name: &str,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     // With default compiler options, wasmtime fails to run an application using SQLite:
     // "unknown import: `env::__extenddftf2` has not been defined"
@@ -345,18 +345,18 @@ async fn run_cargo_build_wasi_threads(
         ("CFLAGS".to_string(), "-pthread".to_string()),
         ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32", lib_dir_str)),
         (format!("CC_{}", target_name), clang_exe_str.to_string()),
-    ]), error_reporter).await
+    ]), progress_reporter).await
 }
 
 async fn run_cargo_build_for_host(
     project: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_cargo(
         &project,
         &["build", "--verbose", "--release"],
         &HashMap::new(),
-        error_reporter,
+        progress_reporter,
     )
     .await
 }
@@ -364,23 +364,23 @@ async fn run_cargo_build_for_host(
 async fn run_cargo_build(
     project: &std::path::Path,
     target: &CargoBuildTarget,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     match target {
-        CargoBuildTarget::Host => run_cargo_build_for_host(project, error_reporter).await,
+        CargoBuildTarget::Host => run_cargo_build_for_host(project, progress_reporter).await,
         CargoBuildTarget::RaspberryPi64(pi) => {
-            run_cargo_build_for_raspberry_pi(&project, &pi.compiler_installation, error_reporter)
+            run_cargo_build_for_raspberry_pi(&project, &pi.compiler_installation, progress_reporter)
                 .await
         }
         CargoBuildTarget::Wasi => {
-            run_cargo_build_target_name(project, "wasm32-wasi", error_reporter).await
+            run_cargo_build_target_name(project, "wasm32-wasi", progress_reporter).await
         }
         CargoBuildTarget::WasiThreads(threads) => {
             run_cargo_build_wasi_threads(
                 project,
                 &threads.wasi_sdk,
                 "wasm32-wasip1-threads",
-                error_reporter,
+                progress_reporter,
             )
             .await
         }
@@ -390,7 +390,7 @@ async fn run_cargo_build(
 async fn build_program(
     program: &Program,
     where_in_filesystem: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
     mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut tasks = Vec::new();
@@ -399,12 +399,12 @@ async fn build_program(
             for target in &program.targets {
                 let target_clone = target.clone();
                 let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
-                let error_reporter_clone = error_reporter.clone();
+                let progress_reporter_clone = progress_reporter.clone();
                 tasks.push(tokio::spawn(async move {
                     run_cargo_build(
                         &where_in_filesystem_clone,
                         &target_clone,
-                        &error_reporter_clone,
+                        &progress_reporter_clone,
                     )
                     .await
                 }));
@@ -412,25 +412,25 @@ async fn build_program(
         }
         CargoBuildMode::Test => {}
     }
-    join_all(tasks, error_reporter).await
+    join_all(tasks, progress_reporter).await
 }
 
 #[async_recursion]
 async fn build_directory_entry(
     directory_entry: &DirectoryEntry,
     where_in_filesystem: &std::path::Path,
-    error_reporter: Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: Arc<dyn ReportProgress + Sync + Send>,
     mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
     match directory_entry {
         DirectoryEntry::Program(program) => {
             error_count +=
-                build_program(&program, &where_in_filesystem, &error_reporter, mode).await;
+                build_program(&program, &where_in_filesystem, &progress_reporter, mode).await;
         }
         DirectoryEntry::Directory(directory) => {
             error_count +=
-                build_recursively(&directory, &where_in_filesystem, &error_reporter, mode).await;
+                build_recursively(&directory, &where_in_filesystem, &progress_reporter, mode).await;
         }
     }
     error_count
@@ -438,7 +438,7 @@ async fn build_directory_entry(
 
 async fn join_all(
     tasks: Vec<tokio::task::JoinHandle<NumberOfErrors>>,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     let mut error_count = NumberOfErrors(0);
     for entry in tasks {
@@ -448,7 +448,7 @@ async fn join_all(
                 error_count += errors;
             }
             Err(error) => {
-                error_reporter.report(&format!("Failed to join a spawned task: {}", error))
+                progress_reporter.log(&format!("Failed to join a spawned task: {}", error))
             }
         }
     }
@@ -459,31 +459,31 @@ async fn join_all(
 async fn build_recursively(
     description: &Directory,
     where_in_filesystem: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
     mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut tasks = Vec::new();
     for entry in &description.entries {
         let subdirectory = where_in_filesystem.join(entry.0);
         let directory_entry = entry.1.clone();
-        let error_reporter_clone = error_reporter.clone();
+        let progress_reporter_clone = progress_reporter.clone();
         let mode_clone = mode.clone();
         tasks.push(tokio::spawn(async move {
             build_directory_entry(
                 &directory_entry,
                 &subdirectory,
-                error_reporter_clone,
+                progress_reporter_clone,
                 mode_clone,
             )
             .await
         }));
     }
-    join_all(tasks, error_reporter).await
+    join_all(tasks, progress_reporter).await
 }
 
 async fn install_raspberry_pi_cpp_compiler(
     tools_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> (NumberOfErrors, Option<RaspberryPi64Target>) {
     // found this compiler on https://developer.arm.com/downloads/-/gnu-a
     let compiler_name = "gcc-arm-10.3-2021.07-mingw-w64-i686-aarch64-none-linux-gnu";
@@ -503,7 +503,7 @@ async fn install_raspberry_pi_cpp_compiler(
             }),
         ),
         Err(error) => {
-            error_reporter.report(&format!(
+            progress_reporter.log(&format!(
                 "Could not download and unpack {}: {}",
                 &download_url, error
             ));
@@ -514,7 +514,7 @@ async fn install_raspberry_pi_cpp_compiler(
 
 async fn install_wasi_cpp_compiler(
     tools_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> (NumberOfErrors, Option<WasiThreadsTarget>) {
     let compiler_name = "wasi-sdk-22";
     let archive_file_name = format!("{}.0.m-mingw.tar.gz", compiler_name);
@@ -541,7 +541,7 @@ async fn install_wasi_cpp_compiler(
             }
         }
         Err(error) => {
-            error_reporter.report(&format!(
+            progress_reporter.log(&format!(
                 "Could not download and unpack {}: {}",
                 &download_url, error
             ));
@@ -552,7 +552,7 @@ async fn install_wasi_cpp_compiler(
 
 async fn install_tools(
     repository: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> (
     NumberOfErrors,
     Option<RaspberryPi64Target>,
@@ -560,21 +560,21 @@ async fn install_tools(
 ) {
     let tools_directory = repository.join("tools");
     let (error_count_1, raspberry_pi) =
-        install_raspberry_pi_cpp_compiler(&tools_directory, error_reporter).await;
+        install_raspberry_pi_cpp_compiler(&tools_directory, progress_reporter).await;
     let (error_count_2, wasi_threads) =
-        install_wasi_cpp_compiler(&tools_directory, error_reporter).await;
+        install_wasi_cpp_compiler(&tools_directory, progress_reporter).await;
     (error_count_1 + error_count_2, raspberry_pi, wasi_threads)
 }
 
 async fn install_grcov(
     working_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_cargo(
         &working_directory,
         &["install", "grcov"],
         &HashMap::new(),
-        error_reporter,
+        progress_reporter,
     )
     .await
 }
@@ -583,7 +583,7 @@ async fn generate_coverage_report_with_grcov(
     repository: &std::path::Path,
     coverage_info_directory: &std::path::Path,
     coverage_report_directory: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
         &repository,
@@ -615,7 +615,7 @@ async fn generate_coverage_report_with_grcov(
                 .expect("Tried to convert path to string"),
         ],
         &HashMap::new(),
-        error_reporter,
+        progress_reporter,
     )
     .await
 }
@@ -635,8 +635,8 @@ fn delete_directory(root: &std::path::Path) -> NumberOfErrors {
 
 struct ConsoleErrorReporter {}
 
-impl ReportError for ConsoleErrorReporter {
-    fn report(&self, error_message: &str) {
+impl ReportProgress for ConsoleErrorReporter {
+    fn log(&self, error_message: &str) {
         println!("{}", &error_message);
     }
 }
@@ -758,11 +758,11 @@ async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterConfi
 async fn build(
     mode: CargoBuildMode,
     repository: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) =
-        install_tools(repository, &error_reporter).await;
-    error_count += run_cargo_fmt(&repository, &error_reporter).await;
+        install_tools(repository, &progress_reporter).await;
+    error_count += run_cargo_fmt(&repository, &progress_reporter).await;
 
     let coverage_directory = repository.join("coverage");
     let coverage_info_directory = coverage_directory.join("info");
@@ -771,9 +771,9 @@ async fn build(
     match mode {
         CargoBuildMode::BuildRelease => {}
         CargoBuildMode::Test => {
-            error_count += install_grcov(repository, &error_reporter).await;
+            error_count += install_grcov(repository, &progress_reporter).await;
             error_count +=
-                run_cargo_test(&repository, &coverage_info_directory, &error_reporter).await;
+                run_cargo_test(&repository, &coverage_info_directory, &progress_reporter).await;
         }
     }
 
@@ -881,7 +881,7 @@ async fn build(
         ]),
     };
 
-    error_count += build_recursively(&root, &repository, &error_reporter, mode).await;
+    error_count += build_recursively(&root, &repository, &progress_reporter, mode).await;
 
     match mode {
         CargoBuildMode::BuildRelease => {
@@ -902,7 +902,7 @@ async fn build(
                 &repository,
                 &coverage_info_directory,
                 &coverage_report_directory,
-                &error_reporter,
+                &progress_reporter,
             )
             .await;
         }
@@ -918,7 +918,7 @@ fn to_std_path(linux_path: &relative_path::RelativePath) -> std::path::PathBuf {
 
 async fn deploy(
     repository: &std::path::Path,
-    error_reporter: &Arc<dyn ReportError + Sync + Send>,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     dotenv::dotenv().ok();
     let ssh_endpoint = std::env::var("ASTRA_DEPLOY_SSH_ENDPOINT")
@@ -933,7 +933,7 @@ async fn deploy(
     session.set_tcp_stream(tcp);
     match session.handshake() {
         Ok(_) => {}
-        Err(error) => error_reporter.report(&format!("Could not SSH handshake: {}", error)),
+        Err(error) => progress_reporter.log(&format!("Could not SSH handshake: {}", error)),
     }
     session.userauth_password(&ssh_user, &ssh_password).unwrap();
     assert!(session.authenticated());
@@ -957,7 +957,7 @@ async fn deploy(
         .stat(&to_std_path(&home))
         .expect("Tried to stat home on the remote");
     if !home_found.is_dir() {
-        error_reporter.report(&format!("Expected a directory at remote location {}", home));
+        progress_reporter.log(&format!("Expected a directory at remote location {}", home));
         return NumberOfErrors(1);
     }
 
@@ -967,7 +967,7 @@ async fn deploy(
             if exists.is_dir() {
                 println!("Our directory appears to exist.");
             } else {
-                error_reporter.report(&format!("Our directory is a file!"));
+                progress_reporter.log(&format!("Our directory is a file!"));
                 return NumberOfErrors(1);
             }
         }
@@ -1037,11 +1037,12 @@ async fn main() -> std::process::ExitCode {
         }
     };
     println!("Command: {:?}", &command);
-    let error_reporter: Arc<dyn ReportError + Send + Sync> = Arc::new(ConsoleErrorReporter {});
+    let progress_reporter: Arc<dyn ReportProgress + Send + Sync> =
+        Arc::new(ConsoleErrorReporter {});
 
     let error_count = match command {
-        AstraCommand::Build(mode) => build(mode, &repository, &error_reporter).await,
-        AstraCommand::Deploy => deploy(&repository, &error_reporter).await,
+        AstraCommand::Build(mode) => build(mode, &repository, &progress_reporter).await,
+        AstraCommand::Deploy => deploy(&repository, &progress_reporter).await,
     };
 
     let build_duration = started_at.elapsed();
