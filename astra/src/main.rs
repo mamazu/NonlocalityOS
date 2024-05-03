@@ -394,13 +394,6 @@ async fn build_program(
     mode: CargoBuildMode,
 ) -> NumberOfErrors {
     let mut tasks = Vec::new();
-
-    let where_in_filesystem_clone = where_in_filesystem.to_path_buf();
-    let error_reporter_clone = error_reporter.clone();
-    tasks.push(tokio::spawn(async move {
-        run_cargo_fmt(&where_in_filesystem_clone, &error_reporter_clone).await
-    }));
-
     match mode {
         CargoBuildMode::BuildRelease => {
             for target in &program.targets {
@@ -769,6 +762,7 @@ async fn build(
 ) -> NumberOfErrors {
     let (mut error_count, maybe_raspberry_pi, maybe_wasi_threads) =
         install_tools(repository, &error_reporter).await;
+    error_count += run_cargo_fmt(&repository, &error_reporter).await;
 
     let coverage_directory = repository.join("coverage");
     let coverage_info_directory = coverage_directory.join("info");
