@@ -186,21 +186,27 @@ async fn run_cargo_fmt(
 async fn run_cargo_test(
     project: &std::path::Path,
     coverage_info_directory: &std::path::Path,
+    with_coverage: bool,
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     let coverage_info_directory_str = coverage_info_directory
         .to_str()
         .expect("Tried to convert path to string");
-    run_cargo(
-        &project,
-        &["test", "--verbose"],
-        &HashMap::from([
+    let environment_variables = if with_coverage {
+        HashMap::from([
             ("RUSTFLAGS".to_string(), "-Cinstrument-coverage".to_string()),
             (
                 "LLVM_PROFILE_FILE".to_string(),
                 format!("{}/cargo-test-%p-%m.profraw", coverage_info_directory_str),
             ),
-        ]),
+        ])
+    } else {
+        HashMap::new()
+    };
+    run_cargo(
+        &project,
+        &["test", "--verbose"],
+        &environment_variables,
         progress_reporter,
     )
     .await
@@ -411,6 +417,7 @@ async fn build_program(
             }
         }
         CargoBuildMode::Test => {}
+        CargoBuildMode::Coverage => {}
     }
     join_all(tasks, progress_reporter).await
 }
@@ -645,6 +652,7 @@ impl ReportProgress for ConsoleErrorReporter {
 enum CargoBuildMode {
     BuildRelease,
     Test,
+    Coverage,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -657,6 +665,7 @@ fn parse_command(input: &str) -> Option<AstraCommand> {
     match input {
         "build" => Some(AstraCommand::Build(CargoBuildMode::BuildRelease)),
         "test" => Some(AstraCommand::Build(CargoBuildMode::Test)),
+        "coverage" => Some(AstraCommand::Build(CargoBuildMode::Coverage)),
         "deploy" => Some(AstraCommand::Deploy),
         _ => None,
     }
@@ -771,9 +780,23 @@ async fn build(
     match mode {
         CargoBuildMode::BuildRelease => {}
         CargoBuildMode::Test => {
+            error_count += run_cargo_test(
+                &repository,
+                &coverage_info_directory,
+                false,
+                &progress_reporter,
+            )
+            .await;
+        }
+        CargoBuildMode::Coverage => {
             error_count += install_grcov(repository, &progress_reporter).await;
-            error_count +=
-                run_cargo_test(&repository, &coverage_info_directory, &progress_reporter).await;
+            error_count += run_cargo_test(
+                &repository,
+                &coverage_info_directory,
+                true,
+                &progress_reporter,
+            )
+            .await;
         }
     }
 
@@ -895,7 +918,8 @@ async fn build(
                 .await
                 .unwrap();
         }
-        CargoBuildMode::Test => {
+        CargoBuildMode::Test => {}
+        CargoBuildMode::Coverage => {
             let coverage_report_directory = coverage_directory.join("report");
             error_count += delete_directory(&coverage_report_directory);
             error_count += generate_coverage_report_with_grcov(
