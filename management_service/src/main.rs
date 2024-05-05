@@ -624,6 +624,61 @@ fn test_run_services_many_finite_services() {
     assert!(is_success);
 }
 
+#[test]
+fn test_run_services_inter_service_connect_accept() {
+    const API_PROVIDER: &str = r#"(module
+        (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
+        
+        (memory 1)
+        (export "memory" (memory 0))
+        
+        (func $main (export "_start")
+            (call $nonlocality_accept)
+            drop
+        )
+        )"#;
+    let api_provider = wat::parse_str(API_PROVIDER).expect("Tried to compile WAT code");
+    const API_CONSUMER: &str = r#"(module
+        (import "env" "nonlocality_connect" (func $nonlocality_connect (param i32) (result i32)))
+        
+        (memory 1)
+        (export "memory" (memory 0))
+        
+        (func $main (export "_start")
+            (call $nonlocality_connect
+                (i32.const 0) ;; OutgoingInterfaceId
+            )
+            drop
+        )
+        )"#;
+    let api_consumer = wat::parse_str(API_CONSUMER).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![
+            Service {
+                id: ServiceId(0),
+                outgoing_interfaces: BTreeMap::from([(
+                    OutgoingInterfaceId(0),
+                    IncomingInterface::new(ServiceId(1), IncomingInterfaceId(0)),
+                )]),
+                wasi: WasiProcess {
+                    code: Blob::Direct(api_consumer),
+                    has_threads: false,
+                },
+            },
+            Service {
+                id: ServiceId(1),
+                outgoing_interfaces: BTreeMap::new(),
+                wasi: WasiProcess {
+                    code: Blob::Direct(api_provider),
+                    has_threads: false,
+                },
+            },
+        ],
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(is_success);
+}
+
 async fn run_api_server(external_port_listener: tokio::net::TcpListener) {
     let (request_shutdown, mut shutdown_requested) = tokio::sync::mpsc::channel::<()>(1);
     loop {
