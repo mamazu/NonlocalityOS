@@ -23,6 +23,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 use wasi_common::file::{FileAccessMode, FileType};
 use wasi_common::pipe::WritePipe;
 use wasi_common::sync::WasiCtxBuilder;
@@ -186,9 +187,14 @@ fn test_create_pair_of_streams() {
     }
 }
 
-struct AcceptResult {
+struct AcceptedSuccessfully {
     interface: IncomingInterfaceId,
     stream: InterServiceApiStream,
+}
+
+enum AcceptResult {
+    Success(AcceptedSuccessfully),
+    ShutdownRequested,
 }
 
 enum HubQueue {
@@ -196,14 +202,27 @@ enum HubQueue {
     Connecting(VecDeque<(IncomingInterfaceId, Promise<InterServiceApiStream>)>),
 }
 
+enum ClusterState {
+    Running,
+    ShuttingDown,
+}
+
+struct InterServiceApiHubSharedState {
+    queue: std::collections::BTreeMap<ServiceId, HubQueue>,
+    cluster: ClusterState,
+}
+
 struct InterServiceApiHub {
-    queue: Mutex<std::collections::BTreeMap<ServiceId, HubQueue>>,
+    state: Mutex<InterServiceApiHubSharedState>,
 }
 
 impl InterServiceApiHub {
     pub fn new() -> InterServiceApiHub {
         InterServiceApiHub {
-            queue: Mutex::new(std::collections::BTreeMap::new()),
+            state: Mutex::new(InterServiceApiHubSharedState {
+                queue: std::collections::BTreeMap::new(),
+                cluster: ClusterState::Running,
+            }),
         }
     }
 
@@ -211,8 +230,13 @@ impl InterServiceApiHub {
         &self,
         accepting_service: ServiceId,
     ) -> std::result::Result<AcceptResult, InterServiceApiError> {
-        let mut locked = self.queue.lock().unwrap();
+        let mut locked = self.state.lock().unwrap();
+        match locked.cluster {
+            ClusterState::Running => {}
+            ClusterState::ShuttingDown => return Ok(AcceptResult::ShutdownRequested),
+        }
         let queue = locked
+            .queue
             .entry(accepting_service)
             .or_insert_with(|| HubQueue::Connecting(VecDeque::new()));
         match *queue {
@@ -223,10 +247,10 @@ impl InterServiceApiHub {
                 Some(next_in_line) => {
                     let (server_side, client_side) = create_pair_of_streams()?;
                     next_in_line.1.set(client_side);
-                    Ok(AcceptResult {
+                    Ok(AcceptResult::Success(AcceptedSuccessfully {
                         interface: next_in_line.0,
                         stream: server_side,
-                    })
+                    }))
                 }
                 None => {
                     let (future, promise) = future_promise();
@@ -246,8 +270,13 @@ impl InterServiceApiHub {
         destination_service: ServiceId,
         interface: IncomingInterfaceId,
     ) -> std::result::Result<InterServiceApiStream, InterServiceApiError> {
-        let mut locked = self.queue.lock().unwrap();
+        let mut locked = self.state.lock().unwrap();
+        match locked.cluster {
+            ClusterState::Running => {}
+            ClusterState::ShuttingDown => todo!(),
+        }
         let queue = locked
+            .queue
             .entry(destination_service)
             .or_insert_with(|| HubQueue::Connecting(VecDeque::new()));
         match *queue {
@@ -257,10 +286,10 @@ impl InterServiceApiHub {
                     Some(content) => content,
                     None => panic!(),
                 };
-                acceptor2.set(AcceptResult {
+                acceptor2.set(AcceptResult::Success(AcceptedSuccessfully {
                     interface: interface,
                     stream: server_side,
-                });
+                }));
                 Ok(client_side)
             }
             HubQueue::Connecting(ref mut waiting) => {
@@ -270,6 +299,31 @@ impl InterServiceApiHub {
                 match future.value() {
                     Some(stream) => Ok(stream),
                     None => Err(InterServiceApiError::UnknownInternalError),
+                }
+            }
+        }
+    }
+
+    pub fn shutdown(&self) {
+        let mut locked = self.state.lock().unwrap();
+        match locked.cluster {
+            ClusterState::Running => {}
+            ClusterState::ShuttingDown => {
+                println!("Already shutting down.");
+                return;
+            }
+        }
+        locked.cluster = ClusterState::ShuttingDown;
+        for queue in &mut locked.queue.values_mut() {
+            loop {
+                match queue {
+                    HubQueue::Accepting(ref mut maybe_accepting) => match maybe_accepting.take() {
+                        Some(accepting) => {
+                            accepting.set(AcceptResult::ShutdownRequested);
+                        }
+                        None => {}
+                    },
+                    HubQueue::Connecting(_connecting) => todo!(),
                 }
             }
         }
@@ -328,22 +382,29 @@ fn run_wasi_process(
         .func_wrap(
             "env",
             "nonlocality_accept",
-            |caller: Caller<'_, InterServiceFuncContext>| -> u64 {
+            |caller: Caller<'_, InterServiceFuncContext>| -> wasmtime::Result<u64> {
                 println!("nonlocality_accept was called.");
                 let context = caller.data();
                 let accept_result = match context.api_hub.accept(context.this_service_id) {
                     Ok(success) => success,
                     Err(error) => {
                         println!("nonlocality_accept failed with {}.", error);
-                        return encode_i32_pair(i32::max_value(), i32::max_value());
+                        return Ok(encode_i32_pair(i32::max_value(), i32::max_value()));
                     }
                 };
-                let file_descriptor = context
-                    .wasi
-                    .push_file(Box::new(accept_result.stream), FileAccessMode::all())
-                    .unwrap() as i32;
-                println!("nonlocality_accept returns FD {}.", file_descriptor);
-                encode_i32_pair(accept_result.interface.0, file_descriptor)
+                match accept_result {
+                    AcceptResult::Success(success) => {
+                        let file_descriptor = context
+                            .wasi
+                            .push_file(Box::new(success.stream), FileAccessMode::all())
+                            .unwrap() as i32;
+                        println!("nonlocality_accept returns FD {}.", file_descriptor);
+                        Ok(encode_i32_pair(success.interface.0, file_descriptor))
+                    }
+                    AcceptResult::ShutdownRequested => {
+                        bail!("Shutdown during nonlocality_accept");
+                    }
+                }
             },
         )
         .expect("Tried to define nonlocality_accept");
@@ -499,8 +560,14 @@ fn handle_external_requests(
     }
 }
 
-async fn run_services(configuration: &ClusterConfiguration) -> bool {
+async fn run_services(configuration: &ClusterConfiguration, shutdown_request: Arc<Notify>) -> bool {
     let api_hub = Arc::new(InterServiceApiHub::new());
+    let api_hub_clone = api_hub.clone();
+    tokio::spawn(async move {
+        shutdown_request.notified().await;
+        println!("Shutdown requested. Shutting down API hub.");
+        api_hub_clone.shutdown();
+    });
     let (_, results) = async_scoped::TokioScope::scope_and_block(|scope| {
         for service in &configuration.services {
             println!("Starting thread for service {:?}.", service.id);
@@ -547,9 +614,9 @@ async fn run_services(configuration: &ClusterConfiguration) -> bool {
             });
         }
     });
+    println!("All threads completed.");
     let mut is_success = true;
     for result in results {
-        println!("Waiting for a thread to complete.");
         match result {
             Ok(wasi_process_result) => match wasi_process_result {
                 Ok(_) => {}
@@ -564,7 +631,6 @@ async fn run_services(configuration: &ClusterConfiguration) -> bool {
             }
         }
     }
-    println!("All threads completed.");
     is_success
 }
 
@@ -576,7 +642,8 @@ async fn run_latest_cluster(
         .await
         .expect("Tried to watch the configuration receiver");
     let configuration = configuration_watcher.borrow_and_update().clone();
-    run_services(&configuration).await
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    run_services(&configuration, shutdown_request).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -584,7 +651,8 @@ async fn test_run_services_empty_cluster() {
     let cluster_configuration = ClusterConfiguration {
         services: Vec::new(),
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(is_success);
 }
 
@@ -633,7 +701,8 @@ async fn test_run_services_one_finite_service() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(is_success);
 }
 
@@ -660,7 +729,8 @@ async fn test_run_services_web_assembly_type_error() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(!is_success);
 }
 
@@ -690,7 +760,8 @@ async fn test_run_services_web_assembly_infinite_recursion() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(!is_success);
 }
 
@@ -716,7 +787,8 @@ async fn test_run_services_web_assembly_import_unknown_function() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(!is_success);
 }
 
@@ -744,7 +816,8 @@ async fn test_run_services_web_assembly_abort() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(!is_success);
 }
 
@@ -763,7 +836,8 @@ async fn test_run_services_many_finite_services() {
         });
     }
     let cluster_configuration = ClusterConfiguration { services: services };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(is_success);
 }
 
@@ -819,7 +893,8 @@ async fn test_run_services_inter_service_connect_accept() {
             },
         ],
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(is_success);
 }
 
@@ -918,8 +993,43 @@ async fn test_run_services_inter_service_write_read() {
             },
         ],
     };
-    let is_success = run_services(&cluster_configuration).await;
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let is_success = run_services(&cluster_configuration, shutdown_request).await;
     assert!(is_success);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_shutdown() {
+    // TODO: add assertions
+    const SOURCE: &str = r#"(module
+        (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
+        
+        (memory 1)
+        (export "memory" (memory 0))
+        
+        (func $main (export "_start")
+            ;; with no one connecting, this call will block until a shutdown is requested
+            (call $nonlocality_accept)
+            drop
+        )
+        )"#;
+    let compiled = wat::parse_str(SOURCE).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![management_interface::Service {
+            id: ServiceId(0),
+            outgoing_interfaces: std::collections::BTreeMap::new(),
+            wasi: management_interface::WasiProcess {
+                code: management_interface::Blob::Direct(compiled),
+                has_threads: false,
+            },
+        }],
+    };
+    let shutdown_request = Arc::new(tokio::sync::Notify::new());
+    let running_services = run_services(&cluster_configuration, shutdown_request.clone());
+    shutdown_request.notify_one();
+    let is_success = running_services.await;
+    // at the moment run_services will fail when you request a shutdown
+    assert!(!is_success);
 }
 
 async fn run_api_server(
