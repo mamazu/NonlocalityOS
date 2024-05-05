@@ -635,6 +635,36 @@ fn test_run_services_web_assembly_type_error() {
 }
 
 #[test]
+fn test_run_services_web_assembly_infinite_recursion() {
+    // TODO: add assertions
+    const RUNTIME_ERROR_PROGRAM: &str = r#"(module
+        (memory 1)
+        (export "memory" (memory 0))
+
+        (func $recurse_infinitely
+            (call $recurse_infinitely))
+
+        (func $main (export "_start")
+            (call $recurse_infinitely)
+        )
+        )"#;
+    let runtime_error_program =
+        wat::parse_str(RUNTIME_ERROR_PROGRAM).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![Service {
+            id: ServiceId(0),
+            outgoing_interfaces: BTreeMap::new(),
+            wasi: WasiProcess {
+                code: Blob::Direct(runtime_error_program),
+                has_threads: false,
+            },
+        }],
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(!is_success);
+}
+
+#[test]
 fn test_run_services_many_finite_services() {
     let hello_world = create_hello_world_wasi_program();
     let mut services = Vec::new();
