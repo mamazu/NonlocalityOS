@@ -672,7 +672,9 @@ fn parse_command(input: &str) -> Option<AstraCommand> {
 }
 
 async fn read_blob(from: &std::path::Path) -> Blob {
-    let mut file = tokio::fs::File::open(from).await.unwrap();
+    let mut file = tokio::fs::File::open(from)
+        .await
+        .expect(&format!("Tried to open {}", from.display()));
     let mut contents = vec![];
     file.read_to_end(&mut contents).await.unwrap();
     Blob::Direct(contents)
@@ -908,9 +910,7 @@ async fn build(
 
     match mode {
         CargoBuildMode::BuildRelease => {
-            let configuration =
-                compile_cluster_configuration(&repository.join("example_applications/rust/target"))
-                    .await;
+            let configuration = compile_cluster_configuration(&repository.join("target")).await;
             let configuration_serialized = to_allocvec(&configuration).unwrap();
             let target = repository.join("target");
             let output_path = target.join("example_applications_cluster.config");
