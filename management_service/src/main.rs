@@ -87,7 +87,10 @@ impl WasiFile for InterServiceApiStream {
                 println!("Wrote {} bytes to the pipe.", written);
                 Ok(written as u64)
             }
-            Err(error) => Err(wasi_common::Error::from(error)),
+            Err(error) => {
+                println!("Writing to pipe failed with {}", error);
+                Err(wasi_common::Error::io())
+            }
         }
     }
 
@@ -433,7 +436,7 @@ fn run_wasi_process(
             println!("Main function returned.");
             Ok(())
         }
-        Err(error) => bail!("Service {:?} failed: {}", this_service_id, error),
+        Err(error) => bail!("Service {:?} failed: {:?}", this_service_id, error),
     }
 }
 
@@ -509,10 +512,10 @@ fn run_services(configuration: &ClusterConfiguration) -> bool {
                     Ok(module) => module,
                     Err(error) => {
                         println!(
-                            "Could not load wasm for service {:?}, error: {}.",
+                            "Could not load wasm for service {:?}, error: {:?}.",
                             service.id, error
                         );
-                        todo!()
+                        return Err(error);
                     }
                 };
                 run_wasi_process(
@@ -626,6 +629,7 @@ fn test_run_services_many_finite_services() {
 
 #[test]
 fn test_run_services_inter_service_connect_accept() {
+    // TODO: add assertions
     const API_PROVIDER: &str = r#"(module
         (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
         
@@ -649,6 +653,105 @@ fn test_run_services_inter_service_connect_accept() {
                 (i32.const 0) ;; OutgoingInterfaceId
             )
             drop
+        )
+        )"#;
+    let api_consumer = wat::parse_str(API_CONSUMER).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![
+            Service {
+                id: ServiceId(0),
+                outgoing_interfaces: BTreeMap::from([(
+                    OutgoingInterfaceId(0),
+                    IncomingInterface::new(ServiceId(1), IncomingInterfaceId(0)),
+                )]),
+                wasi: WasiProcess {
+                    code: Blob::Direct(api_consumer),
+                    has_threads: false,
+                },
+            },
+            Service {
+                id: ServiceId(1),
+                outgoing_interfaces: BTreeMap::new(),
+                wasi: WasiProcess {
+                    code: Blob::Direct(api_provider),
+                    has_threads: false,
+                },
+            },
+        ],
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(is_success);
+}
+
+#[test]
+fn test_run_services_inter_service_write_read() {
+    // TODO: add assertions
+    const API_PROVIDER: &str = r#"(module
+        (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
+        (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+        
+        (memory 1)
+        (export "memory" (memory 0))
+        
+        ;; Buffer for fd_read
+        (global $read_iovec i32 (i32.const 8100))
+        (global $fdread_ret i32 (i32.const 8112))
+        (global $read_buf i32 (i32.const 8120))
+
+        (func $main (export "_start")
+            (local $accept_result i64)
+            (local $api_fd i32)
+            (local $errno i32)
+
+            (local.set $accept_result
+                (call $nonlocality_accept))
+
+            (local.set $api_fd
+                (i32.wrap_i64 (local.get $accept_result)))
+
+            (i32.store (global.get $read_iovec) (global.get $read_buf))
+            (i32.store (i32.add (global.get $read_iovec) (i32.const 4)) (i32.const 128))
+
+            (local.set $errno
+                (call $fd_read
+                    (local.get $api_fd)
+                    (global.get $read_iovec)
+                    (i32.const 1)
+                    (global.get $fdread_ret)))
+        )
+        )"#;
+    let api_provider = wat::parse_str(API_PROVIDER).expect("Tried to compile WAT code");
+    const API_CONSUMER: &str = r#"(module
+        (import "env" "nonlocality_connect" (func $nonlocality_connect (param i32) (result i32)))
+        ;; The function signature for fd_write is:
+        ;; (File Descriptor, *iovs, iovs_len, *nwritten) -> Returns 0 on success, nonzero on error
+        (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+        
+        (memory 1)
+        (export "memory" (memory 0))
+        
+        ;; Write 'hello world\n' to memory at an offset of 8 bytes
+        ;; Note the trailing newline which is required for the text to appear
+        (data (i32.const 8) "hello world\n")
+        
+        (func $main (export "_start")
+            (local $api_fd i32)
+            (local.set $api_fd
+                (call $nonlocality_connect
+                    (i32.const 0) ;; OutgoingInterfaceId
+                ))
+
+            ;; Creating a new io vector within linear memory
+            (i32.store (i32.const 0) (i32.const 8))  ;; iov.iov_base - This is a pointer to the start of the 'hello world\n' string
+            (i32.store (i32.const 4) (i32.const 12))  ;; iov.iov_len - The length of the 'hello world\n' string
+        
+            (call $fd_write
+                (local.get $api_fd) ;; file_descriptor
+                (i32.const 0) ;; *iovs - The pointer to the iov array, which is stored at memory location 0
+                (i32.const 1) ;; iovs_len - We're printing 1 string stored in an iov - so one.
+                (i32.const 20) ;; nwritten - A place in memory to store the number of bytes written
+            )
+            drop ;; Discard the number of bytes written from the top of the stack
         )
         )"#;
     let api_consumer = wat::parse_str(API_CONSUMER).expect("Tried to compile WAT code");
