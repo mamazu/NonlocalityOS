@@ -508,13 +508,25 @@ fn run_wasi_process(
 
 struct ManagementInterfaceImpl {
     request_shutdown: tokio::sync::mpsc::Sender<()>,
-    change_cluster_configuration: tokio::sync::watch::Sender<ClusterConfiguration>,
+    change_cluster_configuration: tokio::sync::mpsc::Sender<Option<ClusterConfiguration>>,
 }
 
 impl ManagementInterface for ManagementInterfaceImpl {
     fn shutdown(&self) -> Result<bool, RPCError> {
         println!("Shutdown requested.");
+
         let handle = tokio::runtime::Handle::current();
+        match handle.block_on(self.change_cluster_configuration.send(None)) {
+            Ok(_) => {}
+            Err(error) => {
+                println!(
+                    "Sending the empty cluster configuration for a shutdown failed: {}",
+                    error
+                );
+                return Ok(false);
+            }
+        }
+
         match handle.block_on(self.request_shutdown.send(())) {
             Ok(_) => Ok(true),
             Err(error) => {
@@ -529,10 +541,11 @@ impl ManagementInterface for ManagementInterfaceImpl {
         configuration: ClusterConfiguration,
     ) -> Result<Option<ConfigurationError>, RPCError> {
         println!("Reconfigure: {:?}", &configuration);
-        match self.change_cluster_configuration.send(configuration) {
+        let handle = tokio::runtime::Handle::current();
+        match handle.block_on(self.change_cluster_configuration.send(Some(configuration))) {
             Ok(_) => Ok(None),
             Err(error) => {
-                println!("Sending the cluster configuration failed: {}", error);
+                println!("Sending the new cluster configuration failed: {}", error);
                 Ok(Some(ConfigurationError::InternalError))
             }
         }
@@ -542,7 +555,7 @@ impl ManagementInterface for ManagementInterfaceImpl {
 fn handle_external_requests(
     stream: tokio::net::TcpStream,
     request_shutdown: tokio::sync::mpsc::Sender<()>,
-    change_cluster_configuration: tokio::sync::watch::Sender<ClusterConfiguration>,
+    change_cluster_configuration: tokio::sync::mpsc::Sender<Option<ClusterConfiguration>>,
 ) {
     let sync_stream = tokio_util::io::SyncIoBridge::new(stream);
     let mut server = ManagementInterfaceRPCServer::new(
@@ -635,15 +648,42 @@ async fn run_services(configuration: &ClusterConfiguration, shutdown_request: Ar
 }
 
 async fn run_latest_cluster(
-    mut configuration_watcher: tokio::sync::watch::Receiver<ClusterConfiguration>,
+    mut configuration_watcher: tokio::sync::mpsc::Receiver<Option<ClusterConfiguration>>,
 ) -> bool {
-    configuration_watcher
-        .changed()
-        .await
-        .expect("Tried to watch the configuration receiver");
-    let configuration = configuration_watcher.borrow_and_update().clone();
-    let shutdown_request = Arc::new(tokio::sync::Notify::new());
-    run_services(&configuration, shutdown_request).await
+    let mut maybe_running_services: Option<(_, Arc<Notify>)> = None;
+    loop {
+        let maybe_configuration = configuration_watcher
+            .recv()
+            .await
+            .expect("Tried to watch the configuration receiver");
+        println!("Received new configuration");
+
+        match maybe_running_services {
+            Some(running_services) => {
+                println!("Shutting down running services..");
+                running_services.1.notify_one();
+                let is_success = running_services.0.await;
+                println!("run_services returned with {}.", is_success);
+            }
+            None => {}
+        }
+
+        match maybe_configuration {
+            Some(configuration) => {
+                println!("Starting services with the new configuration.");
+                let shutdown_request = Arc::new(tokio::sync::Notify::new());
+                let shutdown_request_clone = shutdown_request.clone();
+                maybe_running_services = Some((
+                    async move { run_services(&configuration, shutdown_request).await },
+                    shutdown_request_clone,
+                ));
+            }
+            None => {
+                println!("Cluster configuration was cleared, returning.");
+                return true;
+            }
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -708,7 +748,6 @@ async fn test_run_services_one_finite_service() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_web_assembly_type_error() {
-    // TODO: add assertions
     const TYPE_ERROR_PROGRAM: &str = r#"(module
         (memory 1)
         (export "memory" (memory 0))
@@ -736,7 +775,6 @@ async fn test_run_services_web_assembly_type_error() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_web_assembly_infinite_recursion() {
-    // TODO: add assertions
     const RUNTIME_ERROR_PROGRAM: &str = r#"(module
         (memory 1)
         (export "memory" (memory 0))
@@ -767,7 +805,6 @@ async fn test_run_services_web_assembly_infinite_recursion() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_web_assembly_import_unknown_function() {
-    // TODO: add assertions
     const SOURCE: &str = r#"(module
         (import "env" "function_that_doesnt_exist" (func $function_that_doesnt_exist))
         (memory 1)
@@ -794,7 +831,6 @@ async fn test_run_services_web_assembly_import_unknown_function() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_web_assembly_abort() {
-    // TODO: add assertions
     const RUNTIME_ERROR_PROGRAM: &str = r#"(module
         (import "env" "nonlocality_abort" (func $nonlocality_abort))
         (memory 1)
@@ -841,10 +877,8 @@ async fn test_run_services_many_finite_services() {
     assert!(is_success);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_run_services_inter_service_connect_accept() {
-    // TODO: add assertions
-    const API_PROVIDER: &str = r#"(module
+fn create_program_blocking_on_accept() -> Vec<u8> {
+    const SOURCE: &str = r#"(module
         (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
         
         (memory 1)
@@ -855,7 +889,13 @@ async fn test_run_services_inter_service_connect_accept() {
             drop
         )
         )"#;
-    let api_provider = wat::parse_str(API_PROVIDER).expect("Tried to compile WAT code");
+    let compiled = wat::parse_str(SOURCE).expect("Tried to compile WAT code");
+    compiled
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_inter_service_connect_accept() {
+    let api_provider = create_program_blocking_on_accept();
     const API_CONSUMER: &str = r#"(module
         (import "env" "nonlocality_connect" (func $nonlocality_connect (param i32) (result i32)))
         
@@ -1000,20 +1040,7 @@ async fn test_run_services_inter_service_write_read() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_shutdown() {
-    // TODO: add assertions
-    const SOURCE: &str = r#"(module
-        (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
-        
-        (memory 1)
-        (export "memory" (memory 0))
-        
-        (func $main (export "_start")
-            ;; with no one connecting, this call will block until a shutdown is requested
-            (call $nonlocality_accept)
-            drop
-        )
-        )"#;
-    let compiled = wat::parse_str(SOURCE).expect("Tried to compile WAT code");
+    let compiled = create_program_blocking_on_accept();
     let cluster_configuration = ClusterConfiguration {
         services: vec![management_interface::Service {
             id: ServiceId(0),
@@ -1032,9 +1059,87 @@ async fn test_run_services_shutdown() {
     assert!(!is_success);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_latest_cluster_shutdown() {
+    let (change_cluster_configuration, watch_cluster_configuration) = tokio::sync::mpsc::channel(1);
+    let running_services = tokio::spawn(run_latest_cluster(watch_cluster_configuration));
+
+    {
+        let old_compiled = create_program_blocking_on_accept();
+        let old_cluster_configuration = ClusterConfiguration {
+            services: vec![management_interface::Service {
+                id: ServiceId(0),
+                outgoing_interfaces: std::collections::BTreeMap::new(),
+                wasi: management_interface::WasiProcess {
+                    code: management_interface::Blob::Direct(old_compiled),
+                    has_threads: false,
+                },
+            }],
+        };
+        change_cluster_configuration
+            .send(Some(old_cluster_configuration))
+            .await
+            .unwrap();
+    }
+
+    // clear configuration to shut down
+    change_cluster_configuration.send(None).await.unwrap();
+
+    let is_success = running_services.await.unwrap();
+    assert!(is_success);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_latest_cluster_change_configuration() {
+    let (change_cluster_configuration, watch_cluster_configuration) = tokio::sync::mpsc::channel(1);
+    let running_services = tokio::spawn(run_latest_cluster(watch_cluster_configuration));
+
+    {
+        let old_compiled = create_program_blocking_on_accept();
+        let old_cluster_configuration = ClusterConfiguration {
+            services: vec![management_interface::Service {
+                id: ServiceId(0),
+                outgoing_interfaces: std::collections::BTreeMap::new(),
+                wasi: management_interface::WasiProcess {
+                    code: management_interface::Blob::Direct(old_compiled),
+                    has_threads: false,
+                },
+            }],
+        };
+        change_cluster_configuration
+            .send(Some(old_cluster_configuration))
+            .await
+            .unwrap();
+    }
+
+    {
+        let new_compiled = create_hello_world_wasi_program();
+        let new_cluster_configuration = ClusterConfiguration {
+            services: vec![management_interface::Service {
+                id: ServiceId(0),
+                outgoing_interfaces: std::collections::BTreeMap::new(),
+                wasi: management_interface::WasiProcess {
+                    code: management_interface::Blob::Direct(new_compiled),
+                    has_threads: false,
+                },
+            }],
+        };
+        change_cluster_configuration
+            .send(Some(new_cluster_configuration))
+            .await
+            .unwrap();
+    }
+
+    // clear configuration to shut down
+    change_cluster_configuration.send(None).await.unwrap();
+
+    let is_success = running_services.await.unwrap();
+    assert!(is_success);
+}
+
 async fn run_api_server(
     external_port_listener: tokio::net::TcpListener,
-    change_cluster_configuration: tokio::sync::watch::Sender<ClusterConfiguration>,
+    change_cluster_configuration: tokio::sync::mpsc::Sender<Option<ClusterConfiguration>>,
 ) {
     let (request_shutdown, mut shutdown_requested) = tokio::sync::mpsc::channel::<()>(1);
     loop {
@@ -1091,13 +1196,16 @@ async fn main() -> ExitCode {
         .await
         .unwrap();
     let cluster_configuration = postcard::from_bytes(&cluster_configuration_content[..]).unwrap();
-    let (change_cluster_configuration, watch_cluster_configuration) =
-        tokio::sync::watch::channel(cluster_configuration);
+    let (change_cluster_configuration, watch_cluster_configuration) = tokio::sync::mpsc::channel(1);
     let background_acceptor = tokio::spawn(run_api_server(
         external_port_listener,
-        change_cluster_configuration,
+        change_cluster_configuration.clone(),
     ));
     let is_success = run_latest_cluster(watch_cluster_configuration).await;
+    change_cluster_configuration
+        .send(Some(cluster_configuration))
+        .await
+        .unwrap();
     background_acceptor.await.unwrap();
     if is_success {
         ExitCode::SUCCESS
