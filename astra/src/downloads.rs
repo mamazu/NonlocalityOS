@@ -1,3 +1,4 @@
+#[deny(warnings)]
 use curl::easy::Easy;
 use flate2::read::GzDecoder;
 use std::fs::File;

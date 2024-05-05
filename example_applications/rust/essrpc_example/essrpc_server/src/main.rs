@@ -1,4 +1,4 @@
-use essrpc::essrpc;
+#[deny(warnings)]
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCError;
 use essrpc::RPCServer;
@@ -11,7 +11,7 @@ struct FooImpl {}
 
 impl Foo for FooImpl {
     fn bar(&self, a: String, b: i32) -> Result<String, RPCError> {
-        println!("Hello, world!");
+        println!("Hello, world! {} {}", a, b);
         Ok("12345".to_string())
     }
 }
@@ -46,6 +46,6 @@ fn main() {
         std::thread::sleep(std::time::Duration::from_millis(1000));
     }
     println!("Main thread joining the background thread");
-    background_acceptor.join();
+    background_acceptor.join().unwrap();
     println!("Main thread exiting");
 }

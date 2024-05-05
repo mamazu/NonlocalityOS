@@ -136,6 +136,9 @@ async fn run_process_with_error_only_output(
             return NumberOfErrors(1);
         }
     };
+    if output.status.success() {
+        return NumberOfErrors(0);
+    }
     let mut message = String::from("");
     writeln!(message, "Executable: {}", executable.display()).unwrap();
     writeln!(message, "Arguments: {}", arguments.join(" ")).unwrap();
@@ -154,9 +157,6 @@ async fn run_process_with_error_only_output(
     let stderr = String::from_utf8_lossy(&output.stderr);
     writeln!(message, "{}", &stderr).unwrap();
     progress_reporter.log(&message);
-    if output.status.success() {
-        return NumberOfErrors(0);
-    }
     NumberOfErrors(1)
 }
 

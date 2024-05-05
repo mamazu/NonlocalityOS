@@ -1,10 +1,9 @@
-use display_bytes::display_bytes;
-use nonlocality_env::accept;
-use std::fs::File;
-use std::io::Read;
-use std::io::Write;
+#[deny(warnings)]
 
 fn main() -> Result<(), std::io::Error> {
+    use nonlocality_env::accept;
+    use std::io::Read;
+    use std::io::Write;
     println!("Accepting an API client..");
     let mut accepted = accept();
     println!(
@@ -25,7 +24,7 @@ fn main() -> Result<(), std::io::Error> {
         }
     };
 
-    let response = if (request == "my request") {
+    let response = if request == "my request" {
         "response: success"
     } else {
         "unknown request!!"

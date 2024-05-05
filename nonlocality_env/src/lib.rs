@@ -1,3 +1,4 @@
+#[deny(warnings)]
 use std::fs::File;
 #[cfg(any(unix, target_os = "wasi"))]
 use std::os::fd::FromRawFd;

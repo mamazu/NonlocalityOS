@@ -1,3 +1,4 @@
+#[deny(warnings)]
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCClient;
 use essrpc_trait::Foo;

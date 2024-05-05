@@ -1,15 +1,12 @@
-use display_bytes::display_bytes;
-use nonlocality_env::nonlocality_connect;
-use std::fs::File;
-use std::io::Read;
-use std::io::Write;
-#[cfg(any(unix, target_os = "wasi"))]
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
-
+#[deny(warnings)]
 #[cfg(any(unix, target_os = "wasi"))]
 fn main() -> Result<(), std::io::Error> {
+    use std::fs::File;
+    use std::io::Read;
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
     println!("Connecting to an API server..");
-    let api_fd = unsafe { nonlocality_connect(0) };
+    let api_fd = unsafe { nonlocality_env::nonlocality_connect(0) };
     println!("Connected to an API server..");
     let mut file = unsafe { File::from_raw_fd(api_fd) };
 
