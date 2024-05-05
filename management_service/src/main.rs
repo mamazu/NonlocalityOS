@@ -608,6 +608,33 @@ fn test_run_services_one_finite_service() {
 }
 
 #[test]
+fn test_run_services_web_assembly_type_error() {
+    // TODO: add assertions
+    const TYPE_ERROR_PROGRAM: &str = r#"(module
+        (memory 1)
+        (export "memory" (memory 0))
+        
+        (func $main (export "_start")
+            ;; there is nothing there to drop:
+            drop
+        )
+        )"#;
+    let type_error_program = wat::parse_str(TYPE_ERROR_PROGRAM).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![Service {
+            id: ServiceId(0),
+            outgoing_interfaces: BTreeMap::new(),
+            wasi: WasiProcess {
+                code: Blob::Direct(type_error_program),
+                has_threads: false,
+            },
+        }],
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(!is_success);
+}
+
+#[test]
 fn test_run_services_many_finite_services() {
     let hello_world = create_hello_world_wasi_program();
     let mut services = Vec::new();
