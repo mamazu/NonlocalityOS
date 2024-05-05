@@ -390,6 +390,18 @@ fn run_wasi_process(
         )
         .expect("Tried to define nonlocality_connect");
 
+    println!("Defining nonlocality_abort.");
+    linker
+        .func_wrap(
+            "env",
+            "nonlocality_abort",
+            |caller: Caller<'_, InterServiceFuncContext>| -> wasmtime::Result<()> {
+                println!("nonlocality_abort was called.");
+                bail!("The service called nonlocality_abort.");
+            },
+        )
+        .expect("Tried to define nonlocality_abort");
+
     let mut func_context_store = Store::new(
         &engine,
         InterServiceFuncContext {
@@ -419,9 +431,7 @@ fn run_wasi_process(
     }
 
     println!("Setting up the main module or something.");
-    linker
-        .module(&mut func_context_store, "", &module)
-        .expect("Tried to module the main module, whatever that means");
+    linker.module(&mut func_context_store, "", &module)?;
 
     println!("Calling main function.");
     let entry_point = linker
@@ -646,6 +656,60 @@ fn test_run_services_web_assembly_infinite_recursion() {
 
         (func $main (export "_start")
             (call $recurse_infinitely)
+        )
+        )"#;
+    let runtime_error_program =
+        wat::parse_str(RUNTIME_ERROR_PROGRAM).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![Service {
+            id: ServiceId(0),
+            outgoing_interfaces: BTreeMap::new(),
+            wasi: WasiProcess {
+                code: Blob::Direct(runtime_error_program),
+                has_threads: false,
+            },
+        }],
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(!is_success);
+}
+
+#[test]
+fn test_run_services_web_assembly_import_unknown_function() {
+    // TODO: add assertions
+    const SOURCE: &str = r#"(module
+        (import "env" "function_that_doesnt_exist" (func $function_that_doesnt_exist))
+        (memory 1)
+        (export "memory" (memory 0))
+
+        (func $main (export "_start")
+        )
+        )"#;
+    let compiled = wat::parse_str(SOURCE).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![Service {
+            id: ServiceId(0),
+            outgoing_interfaces: BTreeMap::new(),
+            wasi: WasiProcess {
+                code: Blob::Direct(compiled),
+                has_threads: false,
+            },
+        }],
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(!is_success);
+}
+
+#[test]
+fn test_run_services_web_assembly_abort() {
+    // TODO: add assertions
+    const RUNTIME_ERROR_PROGRAM: &str = r#"(module
+        (import "env" "nonlocality_abort" (func $nonlocality_abort))
+        (memory 1)
+        (export "memory" (memory 0))
+
+        (func $main (export "_start")
+            (call $nonlocality_abort)
         )
         )"#;
     let runtime_error_program =

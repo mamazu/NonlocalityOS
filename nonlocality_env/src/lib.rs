@@ -5,6 +5,7 @@ use std::os::fd::FromRawFd;
 extern "C" {
     pub fn nonlocality_connect(interface: i32) -> i32;
     pub fn nonlocality_accept() -> u64;
+    pub fn nonlocality_abort();
 }
 
 pub struct Accepted {
