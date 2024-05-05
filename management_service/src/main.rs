@@ -492,10 +492,9 @@ fn handle_external_requests(
     }
 }
 
-fn run_services(configuration: &ClusterConfiguration) -> bool {
+async fn run_services(configuration: &ClusterConfiguration) -> bool {
     let api_hub = Arc::new(InterServiceApiHub::new());
-    let is_success = thread::scope(|s| {
-        let mut threads = Vec::new();
+    let (_, results) = async_scoped::TokioScope::scope_and_block(|scope| {
         for service in &configuration.services {
             println!("Starting thread for service {:?}.", service.id);
             let api_hub_2 = api_hub.clone();
@@ -505,7 +504,7 @@ fn run_services(configuration: &ClusterConfiguration) -> bool {
                 management_interface::Blob::Digest(_) => todo!(),
                 management_interface::Blob::Direct(content) => content.clone(),
             };
-            let handler = s.spawn(move || {
+            scope.spawn_blocking(move || {
                 let mut config = Config::new();
                 config.wasm_threads(service.wasi.has_threads);
                 config.debug_info(true);
@@ -539,33 +538,35 @@ fn run_services(configuration: &ClusterConfiguration) -> bool {
                     interfaces,
                 )
             });
-            threads.push(handler);
         }
-
-        let mut is_success = true;
-        for thread in threads {
-            println!("Waiting for a thread to complete.");
-            match thread.join().unwrap() {
+    });
+    let mut is_success = true;
+    for result in results {
+        println!("Waiting for a thread to complete.");
+        match result {
+            Ok(wasi_process_result) => match wasi_process_result {
                 Ok(_) => {}
                 Err(error) => {
                     println!("One process failed with error: {}.", error);
                     is_success = false;
                 }
+            },
+            Err(error) => {
+                println!("One process failed with error: {}.", error);
+                is_success = false;
             }
         }
-
-        println!("All threads completed.");
-        is_success
-    });
+    }
+    println!("All threads completed.");
     is_success
 }
 
-#[test]
-fn test_run_services_empty_cluster() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_empty_cluster() {
     let cluster_configuration = ClusterConfiguration {
         services: Vec::new(),
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(is_success);
 }
 
@@ -600,8 +601,8 @@ fn create_hello_world_wasi_program() -> Vec<u8> {
     wat::parse_str(HELLO_WORLD_WAT).expect("Tried to compile WAT code")
 }
 
-#[test]
-fn test_run_services_one_finite_service() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_one_finite_service() {
     let hello_world = create_hello_world_wasi_program();
     let cluster_configuration = ClusterConfiguration {
         services: vec![Service {
@@ -613,12 +614,12 @@ fn test_run_services_one_finite_service() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(is_success);
 }
 
-#[test]
-fn test_run_services_web_assembly_type_error() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_web_assembly_type_error() {
     // TODO: add assertions
     const TYPE_ERROR_PROGRAM: &str = r#"(module
         (memory 1)
@@ -640,12 +641,12 @@ fn test_run_services_web_assembly_type_error() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(!is_success);
 }
 
-#[test]
-fn test_run_services_web_assembly_infinite_recursion() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_web_assembly_infinite_recursion() {
     // TODO: add assertions
     const RUNTIME_ERROR_PROGRAM: &str = r#"(module
         (memory 1)
@@ -670,12 +671,12 @@ fn test_run_services_web_assembly_infinite_recursion() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(!is_success);
 }
 
-#[test]
-fn test_run_services_web_assembly_import_unknown_function() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_web_assembly_import_unknown_function() {
     // TODO: add assertions
     const SOURCE: &str = r#"(module
         (import "env" "function_that_doesnt_exist" (func $function_that_doesnt_exist))
@@ -696,12 +697,12 @@ fn test_run_services_web_assembly_import_unknown_function() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(!is_success);
 }
 
-#[test]
-fn test_run_services_web_assembly_abort() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_web_assembly_abort() {
     // TODO: add assertions
     const RUNTIME_ERROR_PROGRAM: &str = r#"(module
         (import "env" "nonlocality_abort" (func $nonlocality_abort))
@@ -724,12 +725,12 @@ fn test_run_services_web_assembly_abort() {
             },
         }],
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(!is_success);
 }
 
-#[test]
-fn test_run_services_many_finite_services() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_many_finite_services() {
     let hello_world = create_hello_world_wasi_program();
     let mut services = Vec::new();
     for i in 0..50 {
@@ -743,12 +744,12 @@ fn test_run_services_many_finite_services() {
         });
     }
     let cluster_configuration = ClusterConfiguration { services: services };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(is_success);
 }
 
-#[test]
-fn test_run_services_inter_service_connect_accept() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_inter_service_connect_accept() {
     // TODO: add assertions
     const API_PROVIDER: &str = r#"(module
         (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
@@ -799,12 +800,12 @@ fn test_run_services_inter_service_connect_accept() {
             },
         ],
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(is_success);
 }
 
-#[test]
-fn test_run_services_inter_service_write_read() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_services_inter_service_write_read() {
     // TODO: add assertions
     const API_PROVIDER: &str = r#"(module
         (import "env" "nonlocality_accept" (func $nonlocality_accept (result i64)))
@@ -898,7 +899,7 @@ fn test_run_services_inter_service_write_read() {
             },
         ],
     };
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     assert!(is_success);
 }
 
@@ -958,7 +959,7 @@ async fn main() -> ExitCode {
         .unwrap();
     let cluster_configuration = postcard::from_bytes(&cluster_configuration_content[..]).unwrap();
     let background_acceptor = tokio::spawn(run_api_server(external_port_listener));
-    let is_success = run_services(&cluster_configuration);
+    let is_success = run_services(&cluster_configuration).await;
     background_acceptor.await.unwrap();
     if is_success {
         ExitCode::SUCCESS
