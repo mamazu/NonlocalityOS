@@ -1187,6 +1187,7 @@ dependencies = [
  "wasi-common",
  "wasmtime",
  "wasmtime-wasi-threads",
+ "wat",
  "wiggle",
 ]
 

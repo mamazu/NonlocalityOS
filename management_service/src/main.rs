@@ -4,6 +4,7 @@ use display_bytes::display_bytes;
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCError;
 use essrpc::RPCServer;
+use management_interface::Blob;
 use management_interface::ClusterConfiguration;
 use management_interface::ConfigurationError;
 use management_interface::IncomingInterface;
@@ -11,10 +12,13 @@ use management_interface::IncomingInterfaceId;
 use management_interface::ManagementInterface;
 use management_interface::ManagementInterfaceRPCServer;
 use management_interface::OutgoingInterfaceId;
+use management_interface::Service;
 use management_interface::ServiceId;
+use management_interface::WasiProcess;
 use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::env;
 use std::fmt;
@@ -548,6 +552,49 @@ fn run_services(configuration: &ClusterConfiguration) -> bool {
 fn test_run_services_empty_cluster() {
     let cluster_configuration = ClusterConfiguration {
         services: Vec::new(),
+    };
+    let is_success = run_services(&cluster_configuration);
+    assert!(is_success);
+}
+
+#[test]
+fn test_run_services_finite_service() {
+    let wasi_code = wat::parse_str(r#"(module
+;; Import the required fd_write WASI function which will write the given io vectors to stdout
+;; The function signature for fd_write is:
+;; (File Descriptor, *iovs, iovs_len, *nwritten) -> Returns 0 on success, nonzero on error
+(import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+
+(memory 1)
+(export "memory" (memory 0))
+
+;; Write 'hello world\n' to memory at an offset of 8 bytes
+;; Note the trailing newline which is required for the text to appear
+(data (i32.const 8) "hello world\n")
+
+(func $main (export "_start")
+    ;; Creating a new io vector within linear memory
+    (i32.store (i32.const 0) (i32.const 8))  ;; iov.iov_base - This is a pointer to the start of the 'hello world\n' string
+    (i32.store (i32.const 4) (i32.const 12))  ;; iov.iov_len - The length of the 'hello world\n' string
+
+    (call $fd_write
+        (i32.const 1) ;; file_descriptor - 1 for stdout
+        (i32.const 0) ;; *iovs - The pointer to the iov array, which is stored at memory location 0
+        (i32.const 1) ;; iovs_len - We're printing 1 string stored in an iov - so one.
+        (i32.const 20) ;; nwritten - A place in memory to store the number of bytes written
+    )
+    drop ;; Discard the number of bytes written from the top of the stack
+)
+)"#).expect("Tried to compile WAT code");
+    let cluster_configuration = ClusterConfiguration {
+        services: vec![Service {
+            id: ServiceId(0),
+            outgoing_interfaces: BTreeMap::new(),
+            wasi: WasiProcess {
+                code: Blob::Direct(wasi_code),
+                has_threads: false,
+            },
+        }],
     };
     let is_success = run_services(&cluster_configuration);
     assert!(is_success);
