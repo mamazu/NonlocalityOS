@@ -540,7 +540,7 @@ impl ManagementInterface for ManagementInterfaceImpl {
         &self,
         configuration: ClusterConfiguration,
     ) -> Result<Option<ConfigurationError>, RPCError> {
-        println!("Reconfigure: {:?}", &configuration);
+        println!("Reconfigure was called.");
         let handle = tokio::runtime::Handle::current();
         match handle.block_on(self.change_cluster_configuration.send(Some(configuration))) {
             Ok(_) => Ok(None),
@@ -650,7 +650,7 @@ async fn run_services(configuration: &ClusterConfiguration, shutdown_request: Ar
 async fn run_latest_cluster(
     mut configuration_watcher: tokio::sync::mpsc::Receiver<Option<ClusterConfiguration>>,
 ) -> bool {
-    let mut maybe_running_services: Option<(_, Arc<Notify>)> = None;
+    let mut maybe_running_services: Option<(tokio::task::JoinHandle<bool>, Arc<Notify>)> = None;
     loop {
         let maybe_configuration = configuration_watcher
             .recv()
@@ -663,7 +663,7 @@ async fn run_latest_cluster(
                 println!("Shutting down running services..");
                 running_services.1.notify_one();
                 let is_success = running_services.0.await;
-                println!("run_services returned with {}.", is_success);
+                println!("run_services returned with {}.", is_success.unwrap());
             }
             None => {}
         }
@@ -674,7 +674,9 @@ async fn run_latest_cluster(
                 let shutdown_request = Arc::new(tokio::sync::Notify::new());
                 let shutdown_request_clone = shutdown_request.clone();
                 maybe_running_services = Some((
-                    async move { run_services(&configuration, shutdown_request).await },
+                    tokio::spawn(
+                        async move { run_services(&configuration, shutdown_request).await },
+                    ),
                     shutdown_request_clone,
                 ));
             }
@@ -1197,15 +1199,16 @@ async fn main() -> ExitCode {
         .unwrap();
     let cluster_configuration = postcard::from_bytes(&cluster_configuration_content[..]).unwrap();
     let (change_cluster_configuration, watch_cluster_configuration) = tokio::sync::mpsc::channel(1);
+    change_cluster_configuration
+        .send(Some(cluster_configuration))
+        .await
+        .unwrap();
+
     let background_acceptor = tokio::spawn(run_api_server(
         external_port_listener,
         change_cluster_configuration.clone(),
     ));
     let is_success = run_latest_cluster(watch_cluster_configuration).await;
-    change_cluster_configuration
-        .send(Some(cluster_configuration))
-        .await
-        .unwrap();
     background_acceptor.await.unwrap();
     if is_success {
         ExitCode::SUCCESS
