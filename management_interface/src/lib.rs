@@ -58,7 +58,7 @@ pub struct ClusterConfiguration {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub enum ConfigurationError {
-    NotImplemented,
+    InternalError,
 }
 
 #[essrpc]

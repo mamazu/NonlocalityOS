@@ -1,9 +1,9 @@
+#[deny(warnings)]
 use anyhow::bail;
 use display_bytes::display_bytes;
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCError;
 use essrpc::RPCServer;
-use management_interface::Blob;
 use management_interface::ClusterConfiguration;
 use management_interface::ConfigurationError;
 use management_interface::IncomingInterface;
@@ -11,13 +11,10 @@ use management_interface::IncomingInterfaceId;
 use management_interface::ManagementInterface;
 use management_interface::ManagementInterfaceRPCServer;
 use management_interface::OutgoingInterfaceId;
-use management_interface::Service;
 use management_interface::ServiceId;
-use management_interface::WasiProcess;
 use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::env;
 use std::fmt;
@@ -26,7 +23,6 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use wasi_common::file::{FileAccessMode, FileType};
 use wasi_common::pipe::WritePipe;
 use wasi_common::sync::WasiCtxBuilder;
@@ -395,7 +391,7 @@ fn run_wasi_process(
         .func_wrap(
             "env",
             "nonlocality_abort",
-            |caller: Caller<'_, InterServiceFuncContext>| -> wasmtime::Result<()> {
+            |_caller: Caller<'_, InterServiceFuncContext>| -> wasmtime::Result<()> {
                 println!("nonlocality_abort was called.");
                 bail!("The service called nonlocality_abort.");
             },
@@ -451,6 +447,7 @@ fn run_wasi_process(
 
 struct ManagementInterfaceImpl {
     request_shutdown: tokio::sync::mpsc::Sender<()>,
+    change_cluster_configuration: tokio::sync::watch::Sender<ClusterConfiguration>,
 }
 
 impl ManagementInterface for ManagementInterfaceImpl {
@@ -471,17 +468,27 @@ impl ManagementInterface for ManagementInterfaceImpl {
         configuration: ClusterConfiguration,
     ) -> Result<Option<ConfigurationError>, RPCError> {
         println!("Reconfigure: {:?}", &configuration);
-        Ok(Some(ConfigurationError::NotImplemented))
+        match self.change_cluster_configuration.send(configuration) {
+            Ok(_) => Ok(None),
+            Err(error) => {
+                println!("Sending the cluster configuration failed: {}", error);
+                Ok(Some(ConfigurationError::InternalError))
+            }
+        }
     }
 }
 
 fn handle_external_requests(
     stream: tokio::net::TcpStream,
     request_shutdown: tokio::sync::mpsc::Sender<()>,
+    change_cluster_configuration: tokio::sync::watch::Sender<ClusterConfiguration>,
 ) {
     let sync_stream = tokio_util::io::SyncIoBridge::new(stream);
     let mut server = ManagementInterfaceRPCServer::new(
-        ManagementInterfaceImpl { request_shutdown },
+        ManagementInterfaceImpl {
+            request_shutdown,
+            change_cluster_configuration,
+        },
         BincodeTransport::new(sync_stream),
     );
     match server.serve() {
@@ -561,6 +568,17 @@ async fn run_services(configuration: &ClusterConfiguration) -> bool {
     is_success
 }
 
+async fn run_latest_cluster(
+    mut configuration_watcher: tokio::sync::watch::Receiver<ClusterConfiguration>,
+) -> bool {
+    configuration_watcher
+        .changed()
+        .await
+        .expect("Tried to watch the configuration receiver");
+    let configuration = configuration_watcher.borrow_and_update().clone();
+    run_services(&configuration).await
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_empty_cluster() {
     let cluster_configuration = ClusterConfiguration {
@@ -570,6 +588,7 @@ async fn test_run_services_empty_cluster() {
     assert!(is_success);
 }
 
+#[cfg(test)]
 fn create_hello_world_wasi_program() -> Vec<u8> {
     const HELLO_WORLD_WAT: &str = r#"(module
             ;; Import the required fd_write WASI function which will write the given io vectors to stdout
@@ -605,11 +624,11 @@ fn create_hello_world_wasi_program() -> Vec<u8> {
 async fn test_run_services_one_finite_service() {
     let hello_world = create_hello_world_wasi_program();
     let cluster_configuration = ClusterConfiguration {
-        services: vec![Service {
+        services: vec![management_interface::Service {
             id: ServiceId(0),
-            outgoing_interfaces: BTreeMap::new(),
-            wasi: WasiProcess {
-                code: Blob::Direct(hello_world),
+            outgoing_interfaces: std::collections::BTreeMap::new(),
+            wasi: management_interface::WasiProcess {
+                code: management_interface::Blob::Direct(hello_world),
                 has_threads: false,
             },
         }],
@@ -632,11 +651,11 @@ async fn test_run_services_web_assembly_type_error() {
         )"#;
     let type_error_program = wat::parse_str(TYPE_ERROR_PROGRAM).expect("Tried to compile WAT code");
     let cluster_configuration = ClusterConfiguration {
-        services: vec![Service {
+        services: vec![management_interface::Service {
             id: ServiceId(0),
-            outgoing_interfaces: BTreeMap::new(),
-            wasi: WasiProcess {
-                code: Blob::Direct(type_error_program),
+            outgoing_interfaces: std::collections::BTreeMap::new(),
+            wasi: management_interface::WasiProcess {
+                code: management_interface::Blob::Direct(type_error_program),
                 has_threads: false,
             },
         }],
@@ -662,11 +681,11 @@ async fn test_run_services_web_assembly_infinite_recursion() {
     let runtime_error_program =
         wat::parse_str(RUNTIME_ERROR_PROGRAM).expect("Tried to compile WAT code");
     let cluster_configuration = ClusterConfiguration {
-        services: vec![Service {
+        services: vec![management_interface::Service {
             id: ServiceId(0),
-            outgoing_interfaces: BTreeMap::new(),
-            wasi: WasiProcess {
-                code: Blob::Direct(runtime_error_program),
+            outgoing_interfaces: std::collections::BTreeMap::new(),
+            wasi: management_interface::WasiProcess {
+                code: management_interface::Blob::Direct(runtime_error_program),
                 has_threads: false,
             },
         }],
@@ -688,11 +707,11 @@ async fn test_run_services_web_assembly_import_unknown_function() {
         )"#;
     let compiled = wat::parse_str(SOURCE).expect("Tried to compile WAT code");
     let cluster_configuration = ClusterConfiguration {
-        services: vec![Service {
+        services: vec![management_interface::Service {
             id: ServiceId(0),
-            outgoing_interfaces: BTreeMap::new(),
-            wasi: WasiProcess {
-                code: Blob::Direct(compiled),
+            outgoing_interfaces: std::collections::BTreeMap::new(),
+            wasi: management_interface::WasiProcess {
+                code: management_interface::Blob::Direct(compiled),
                 has_threads: false,
             },
         }],
@@ -716,11 +735,11 @@ async fn test_run_services_web_assembly_abort() {
     let runtime_error_program =
         wat::parse_str(RUNTIME_ERROR_PROGRAM).expect("Tried to compile WAT code");
     let cluster_configuration = ClusterConfiguration {
-        services: vec![Service {
+        services: vec![management_interface::Service {
             id: ServiceId(0),
-            outgoing_interfaces: BTreeMap::new(),
-            wasi: WasiProcess {
-                code: Blob::Direct(runtime_error_program),
+            outgoing_interfaces: std::collections::BTreeMap::new(),
+            wasi: management_interface::WasiProcess {
+                code: management_interface::Blob::Direct(runtime_error_program),
                 has_threads: false,
             },
         }],
@@ -734,11 +753,11 @@ async fn test_run_services_many_finite_services() {
     let hello_world = create_hello_world_wasi_program();
     let mut services = Vec::new();
     for i in 0..50 {
-        services.push(Service {
+        services.push(management_interface::Service {
             id: ServiceId(i),
-            outgoing_interfaces: BTreeMap::new(),
-            wasi: WasiProcess {
-                code: Blob::Direct(hello_world.clone()),
+            outgoing_interfaces: std::collections::BTreeMap::new(),
+            wasi: management_interface::WasiProcess {
+                code: management_interface::Blob::Direct(hello_world.clone()),
                 has_threads: false,
             },
         });
@@ -779,22 +798,22 @@ async fn test_run_services_inter_service_connect_accept() {
     let api_consumer = wat::parse_str(API_CONSUMER).expect("Tried to compile WAT code");
     let cluster_configuration = ClusterConfiguration {
         services: vec![
-            Service {
+            management_interface::Service {
                 id: ServiceId(0),
-                outgoing_interfaces: BTreeMap::from([(
+                outgoing_interfaces: std::collections::BTreeMap::from([(
                     OutgoingInterfaceId(0),
                     IncomingInterface::new(ServiceId(1), IncomingInterfaceId(0)),
                 )]),
-                wasi: WasiProcess {
-                    code: Blob::Direct(api_consumer),
+                wasi: management_interface::WasiProcess {
+                    code: management_interface::Blob::Direct(api_consumer),
                     has_threads: false,
                 },
             },
-            Service {
+            management_interface::Service {
                 id: ServiceId(1),
-                outgoing_interfaces: BTreeMap::new(),
-                wasi: WasiProcess {
-                    code: Blob::Direct(api_provider),
+                outgoing_interfaces: std::collections::BTreeMap::new(),
+                wasi: management_interface::WasiProcess {
+                    code: management_interface::Blob::Direct(api_provider),
                     has_threads: false,
                 },
             },
@@ -878,22 +897,22 @@ async fn test_run_services_inter_service_write_read() {
     let api_consumer = wat::parse_str(API_CONSUMER).expect("Tried to compile WAT code");
     let cluster_configuration = ClusterConfiguration {
         services: vec![
-            Service {
+            management_interface::Service {
                 id: ServiceId(0),
-                outgoing_interfaces: BTreeMap::from([(
+                outgoing_interfaces: std::collections::BTreeMap::from([(
                     OutgoingInterfaceId(0),
                     IncomingInterface::new(ServiceId(1), IncomingInterfaceId(0)),
                 )]),
-                wasi: WasiProcess {
-                    code: Blob::Direct(api_consumer),
+                wasi: management_interface::WasiProcess {
+                    code: management_interface::Blob::Direct(api_consumer),
                     has_threads: false,
                 },
             },
-            Service {
+            management_interface::Service {
                 id: ServiceId(1),
-                outgoing_interfaces: BTreeMap::new(),
-                wasi: WasiProcess {
-                    code: Blob::Direct(api_provider),
+                outgoing_interfaces: std::collections::BTreeMap::new(),
+                wasi: management_interface::WasiProcess {
+                    code: management_interface::Blob::Direct(api_provider),
                     has_threads: false,
                 },
             },
@@ -903,7 +922,10 @@ async fn test_run_services_inter_service_write_read() {
     assert!(is_success);
 }
 
-async fn run_api_server(external_port_listener: tokio::net::TcpListener) {
+async fn run_api_server(
+    external_port_listener: tokio::net::TcpListener,
+    change_cluster_configuration: tokio::sync::watch::Sender<ClusterConfiguration>,
+) {
     let (request_shutdown, mut shutdown_requested) = tokio::sync::mpsc::channel::<()>(1);
     loop {
         tokio::select! {
@@ -914,8 +936,9 @@ async fn run_api_server(external_port_listener: tokio::net::TcpListener) {
                         incoming_connection.1
                     );
                     let request_shutdown_clone = request_shutdown.clone();
+                    let change_cluster_configuration_clone = change_cluster_configuration.clone();
                     tokio::task::spawn_blocking(move || {
-                        handle_external_requests(incoming_connection.0, request_shutdown_clone);
+                        handle_external_requests(incoming_connection.0, request_shutdown_clone, change_cluster_configuration_clone);
                     });
                 }
                 Err(error) => {
@@ -958,8 +981,13 @@ async fn main() -> ExitCode {
         .await
         .unwrap();
     let cluster_configuration = postcard::from_bytes(&cluster_configuration_content[..]).unwrap();
-    let background_acceptor = tokio::spawn(run_api_server(external_port_listener));
-    let is_success = run_services(&cluster_configuration).await;
+    let (change_cluster_configuration, watch_cluster_configuration) =
+        tokio::sync::watch::channel(cluster_configuration);
+    let background_acceptor = tokio::spawn(run_api_server(
+        external_port_listener,
+        change_cluster_configuration,
+    ));
+    let is_success = run_latest_cluster(watch_cluster_configuration).await;
     background_acceptor.await.unwrap();
     if is_success {
         ExitCode::SUCCESS
