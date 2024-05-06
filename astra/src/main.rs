@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::os::windows::fs::MetadataExt;
 use std::sync::Arc;
-pub mod downloads;
 pub mod cluster_configuration;
+pub mod downloads;
 
 #[derive(Clone)]
 struct RaspberryPi64Target {
@@ -809,7 +809,9 @@ async fn build(
 
     match mode {
         CargoBuildMode::BuildRelease => {
-            let configuration = cluster_configuration::compile_cluster_configuration(&repository.join("target")).await;
+            let configuration =
+                cluster_configuration::compile_cluster_configuration(&repository.join("target"))
+                    .await;
             let configuration_serialized = to_allocvec(&configuration).unwrap();
             let target = repository.join("target");
             let output_path = target.join("example_applications_cluster.config");
