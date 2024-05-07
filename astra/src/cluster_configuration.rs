@@ -26,8 +26,8 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
     let database_server_id = ServiceId(5);
     let database_client_id = ServiceId(6);
     let idle_service_id = ServiceId(7);
-    let log_server_id= ServiceId(8);
-    let log_client_id= ServiceId(9);
+    let log_server_id = ServiceId(8);
+    let log_client_id = ServiceId(9);
 
     ClusterConfiguration {
         services: vec![
