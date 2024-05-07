@@ -86,11 +86,11 @@ fn test_insert_user_row() {
     );
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     println!("Opening the database.");
     let connection = create_database_connection(std::path::Path::new("/database.sqlite"));
     println!("Accepting an API client..");
-    let accepted = accept();
+    let accepted = accept()?;
     println!(
         "Accepted an API client for interface {}.",
         accepted.interface
@@ -109,4 +109,5 @@ fn main() {
             println!("Serve failed: {}.", error);
         }
     }
+    Ok(())
 }

@@ -5,7 +5,7 @@ fn main() -> Result<(), std::io::Error> {
     use std::io::Read;
     use std::io::Write;
     println!("Accepting an API client..");
-    let mut accepted = accept();
+    let mut accepted = accept()?;
     println!(
         "Accepted an API client for interface{}.",
         accepted.interface

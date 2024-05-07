@@ -15,15 +15,20 @@ pub struct Accepted {
 }
 
 #[cfg(any(unix, target_os = "wasi"))]
-pub fn accept() -> Accepted {
+pub fn accept() -> std::io::Result<Accepted> {
     let encoded_result = unsafe { nonlocality_accept() };
     let interface = (encoded_result >> 32) as i32;
-    let stream = unsafe { File::from_raw_fd((encoded_result & (u32::max_value() as u64)) as i32) };
-    Accepted { interface, stream }
+    let file_descriptor = (encoded_result & (u32::max_value() as u64)) as i32;
+    if interface < 0 || file_descriptor < 0 {
+        return Err(std::io::Error::new(std::io::ErrorKind::Other,
+            "nonlocality_accept most likely failed because you tried to call it from two threads at the same time."));
+    }
+    let stream = unsafe { File::from_raw_fd(file_descriptor) };
+    Ok(Accepted { interface, stream })
 }
 
 #[cfg(target_os = "windows")]
-pub fn accept() -> Accepted {
+pub fn accept() -> std::io::Result<Accepted> {
     todo!();
 }
 

@@ -15,9 +15,9 @@ impl Logger for ConsoleLogger {
     }
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     loop {
-        let accepted = accept();
+        let accepted = accept()?;
         let _ = std::thread::spawn(move || {
             println!("Logger ready on interface {}.", accepted.interface);
             let mut server =

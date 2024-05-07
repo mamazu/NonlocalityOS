@@ -16,15 +16,15 @@ impl Foo for FooImpl {
     }
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let is_done = std::sync::Arc::new(AtomicBool::new(false));
 
     // Rust is unnecessarily complicated sometimes
     let is_done_closure = is_done.clone();
 
-    let background_acceptor = std::thread::spawn(move || {
+    let background_acceptor = std::thread::spawn(move || -> std::io::Result<()> {
         println!("Accepting an API client..");
-        let accepted = accept();
+        let accepted = accept()?;
         println!(
             "Accepted an API client for interface {}.",
             accepted.interface
@@ -40,12 +40,14 @@ fn main() {
         }
         is_done_closure.store(true, std::sync::atomic::Ordering::SeqCst);
         println!("Background thread exiting");
+        Ok(())
     });
     while !is_done.load(std::sync::atomic::Ordering::SeqCst) {
         println!("Main thread waiting..");
         std::thread::sleep(std::time::Duration::from_millis(1000));
     }
     println!("Main thread joining the background thread");
-    background_acceptor.join().unwrap();
+    background_acceptor.join().unwrap()?;
     println!("Main thread exiting");
+    Ok(())
 }
