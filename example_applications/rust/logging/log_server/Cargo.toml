@@ -9,3 +9,4 @@ edition = "2021"
 essrpc = {version = "0.4.1", features = ["bincode_transport", "async_client"]}
 nonlocality_env = { path ="../../../../nonlocality_env" }
 log_trait = { path ="../log_trait" }
+sqlite = "0.36.0"
