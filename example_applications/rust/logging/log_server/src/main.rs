@@ -6,41 +6,67 @@ use log_trait::LogLevel;
 use log_trait::Logger;
 use log_trait::LoggerRPCServer;
 use nonlocality_env::accept;
-use std::fs::OpenOptions;
-use std::io::Seek;
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-struct FileLogger {
-    pub handle: Arc<Mutex<std::fs::File>>,
+fn create_database_connection(path: &std::path::Path) -> sqlite::Connection {
+    let connection = sqlite::open(path).expect("Tried to create database connection");
+    let query = "CREATE TABLE IF NOT EXISTS log_entries (log_level TEXT, message TEXT)";
+    connection.execute(query).expect("Tried to create table");
+
+    return connection;
 }
 
-impl Logger for FileLogger {
+struct DatabaseLogger {
+    pub handle: Arc<Mutex<sqlite::Connection>>,
+}
+
+impl Logger for DatabaseLogger {
     fn log(&self, level: LogLevel, message: String) -> Result<(), RPCError> {
         println!("Received log message: {} {}", level, message);
-        self.handle
+        let connection = self
+            .handle
             .lock()
-            .unwrap()
-            .write_all(format!("[{}] {}\n", level, message).as_bytes())?;
+            .expect("Unable to get a lock on the database connection.");
+
+        let query = "INSERT INTO log_entries (log_level, message) VALUES (?, ?)";
+        let mut statement = connection
+            .prepare(query)
+            .expect("Tried to prepare statement");
+        statement
+            .bind((1, &format!("{}", level)[..]))
+            .expect("Tried to bind parameter to statement");
+        statement
+            .bind((2, &message[..]))
+            .expect("Tried to bind parameter to statement");
+
+        loop {
+            match statement.next().expect("Tried to execute statement") {
+                sqlite::State::Row => {
+                    println!("INSERT should not return a row")
+                }
+                sqlite::State::Done => break,
+            }
+        }
         return Ok(());
     }
 }
 
+#[test]
+fn test_log() {
+    let connection = create_database_connection(std::path::Path::new(":memory:"));
+    let logger = DatabaseLogger {
+        handle: Arc::new(Mutex::new(connection)),
+    };
+
+    logger.log(LogLevel::Info, "I can log".to_string()).unwrap();
+}
+
 fn main() -> std::io::Result<()> {
     println!("Starting logger server");
-    let path = std::path::Path::new("/foo.txt");
-    let mut file_handle = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .expect(format!("Unable to open file at {}", path.display()).as_str());
-    file_handle
-        .seek(std::io::SeekFrom::End(0))
-        .expect("Tried to seek");
-
-    let handle = Arc::new(Mutex::new(file_handle));
+    let handle = Arc::new(Mutex::new(create_database_connection(
+        std::path::Path::new("/database.sqlite"),
+    )));
 
     loop {
         let accepted = accept()?;
@@ -48,7 +74,7 @@ fn main() -> std::io::Result<()> {
         let _ = std::thread::spawn(move || {
             println!("Logger ready on interface {}.", accepted.interface);
             let mut server = LoggerRPCServer::new(
-                FileLogger {
+                DatabaseLogger {
                     handle: handle_clone,
                 },
                 BincodeTransport::new(accepted.stream),
