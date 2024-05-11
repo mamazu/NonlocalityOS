@@ -16,7 +16,6 @@ use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
 use std::any::Any;
 use std::collections::VecDeque;
-use std::env;
 use std::fmt;
 use std::io::Read;
 use std::io::Write;
@@ -1243,25 +1242,112 @@ async fn run_api_server(
     }
 }
 
+async fn run_process(
+    working_directory: &std::path::Path,
+    executable: &std::path::Path,
+    arguments: &[&str],
+) {
+    println!("Executable: {}", executable.display());
+    println!("Arguments: {}", arguments.join(" "));
+    println!("Working directory: {}", working_directory.display());
+    let output = tokio::process::Command::new(executable)
+        .args(arguments)
+        .current_dir(&working_directory)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .expect("start process");
+    println!("Exit status: {}", output.status);
+    println!("Standard output:");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("{}", &stdout);
+    println!("Standard error:");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("{}", &stderr);
+    assert!(output.status.success());
+}
+
+async fn install(
+    executable: &std::path::Path,
+    cluster_configuration: &std::path::Path,
+    filesystem_access: &std::path::Path,
+) {
+    let service_file_content = format!(
+        r#"[Unit]
+Description=NonlocalityOS Management Service
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=15
+ExecStart={} {} --filesystem_access_root {}
+WorkingDirectory=/
+User=root
+
+[Install]
+WantedBy=multi-user.target
+"#,
+        executable.display(),
+        cluster_configuration.display(),
+        filesystem_access.display(),
+    );
+    let temporary_directory = tempfile::tempdir().expect("create a temporary directory");
+    let service_file_name = "nonlocalityos_management.service";
+    let temporary_file_path = temporary_directory.path().join(service_file_name);
+    let mut temporary_file =
+        std::fs::File::create_new(&temporary_file_path).expect("create temporary file");
+    write!(&mut temporary_file, "{}", &service_file_content)
+        .expect("write content of the service file");
+    let systemd_services_directory = std::path::Path::new("/etc/systemd/system");
+    let systemd_service_path = systemd_services_directory.join(service_file_name);
+    std::fs::rename(&temporary_file_path, &systemd_service_path)
+        .expect("move temporary service file into systemd directory");
+    let systemctl = std::path::Path::new("/usr/bin/systemctl");
+    let root_directory = std::path::Path::new("/");
+    run_process(root_directory, systemctl, &["daemon-reload"]).await;
+    run_process(root_directory, systemctl, &["enable", service_file_name]).await;
+    run_process(root_directory, systemctl, &["start", service_file_name]).await;
+    run_process(root_directory, systemctl, &["status", service_file_name]).await;
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
     let mut filesystem_access: Option<String> = None;
     let mut cluster_configuration = "Something".to_string();
+    let mut is_install_mode = false;
     {
         // this block limits scope of borrows by ap.refer() method
-        let mut ap = argparse::ArgumentParser::new();
-        ap.set_description("Greet somebody.");
-        ap.refer(&mut cluster_configuration).add_argument(
-            "cluster_configuration",
-            argparse::Store,
-            "Path to where the cluster configuration file should be generated to.",
-        );
-        ap.refer(&mut filesystem_access).add_option(
+        let mut argument_parser = argparse::ArgumentParser::new();
+        argument_parser.set_description("NonlocalityOS management service");
+        argument_parser
+            .refer(&mut cluster_configuration)
+            .add_argument(
+                "cluster_configuration",
+                argparse::Store,
+                "Path to where the cluster configuration file should be generated to.",
+            );
+        argument_parser.refer(&mut filesystem_access).add_option(
             &["--filesystem_access_root"],
             argparse::StoreOption,
             "Path to where filesystem access should be stored.",
         );
-        ap.parse_args_or_exit();
+        argument_parser.refer(&mut is_install_mode).add_option(
+            &["--install"],
+            argparse::StoreTrue,
+            "Install a permanently running background service.",
+        );
+        match argument_parser.parse_args() {
+            Ok(_) => {}
+            Err(exit_code) => {
+                assert_ne!(0, exit_code);
+                // ExitCode cannot be constructed from i32 for some reason. No idea what they were thinking. Not worth our time to figure this out.
+                return ExitCode::FAILURE;
+            }
+        }
     }
 
     let cluster_configuration_file_path = Path::new(&cluster_configuration);
@@ -1269,6 +1355,19 @@ async fn main() -> ExitCode {
         Some(ref path) => Some(Path::new(path)),
         None => None,
     };
+
+    if is_install_mode {
+        println!("Installing management_service as a permanent background service.");
+        let arguments: Vec<String> = std::env::args().collect();
+        let executable = std::path::Path::new(&arguments[0]);
+        install(
+            executable,
+            cluster_configuration_file_path,
+            filesystem_access_root.expect("filesystem access required"),
+        )
+        .await;
+        return ExitCode::SUCCESS;
+    }
 
     let external_port = "127.0.0.1:6969";
     let external_port_listener = match tokio::net::TcpListener::bind(external_port).await {

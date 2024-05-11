@@ -1228,6 +1228,7 @@ dependencies = [
  "promising-future",
  "relative-path",
  "serde",
+ "tempfile",
  "tokio",
  "tokio-util 0.7.11",
  "wasi-common",

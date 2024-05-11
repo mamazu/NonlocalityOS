@@ -1,10 +1,12 @@
 #![deny(warnings)]
 use async_recursion::async_recursion;
 use postcard::to_allocvec;
+use relative_path::RelativePath;
 use ssh2::OpenFlags;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::os::windows::fs::MetadataExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 pub mod cluster_configuration;
 pub mod downloads;
@@ -665,6 +667,12 @@ fn parse_command(input: &str) -> Option<AstraCommand> {
     }
 }
 
+fn where_cluster_configuration(repository: &std::path::Path) -> PathBuf {
+    let target = repository.join("target");
+    let output_path = target.join("example_applications_cluster.config");
+    output_path
+}
+
 async fn build(
     mode: CargoBuildMode,
     repository: &std::path::Path,
@@ -837,8 +845,7 @@ async fn build(
                 cluster_configuration::compile_cluster_configuration(&repository.join("target"))
                     .await;
             let configuration_serialized = to_allocvec(&configuration).unwrap();
-            let target = repository.join("target");
-            let output_path = target.join("example_applications_cluster.config");
+            let output_path = where_cluster_configuration(&repository);
             tokio::fs::write(&output_path, &configuration_serialized[..])
                 .await
                 .unwrap();
@@ -865,6 +872,48 @@ fn to_std_path(linux_path: &relative_path::RelativePath) -> std::path::PathBuf {
     linux_path.to_path(std::path::Path::new("/"))
 }
 
+fn upload_file(
+    session: &ssh2::Session,
+    sftp: &ssh2::Sftp,
+    from: &std::path::Path,
+    to: &RelativePath,
+    is_executable: bool,
+) {
+    let mut file_to_upload =
+        std::fs::File::open(&from).expect("Tried to open the binary to upload");
+    let file_size = file_to_upload
+        .metadata()
+        .expect("Tried to determine the file size")
+        .file_size();
+    println!("Uploading file with {} bytes", file_size);
+
+    let mode = match is_executable {
+        true => 0o755,
+        false => 0o644,
+    };
+    let mut file_uploader = sftp
+        .open_mode(
+            &to_std_path(&to),
+            OpenFlags::WRITE | OpenFlags::TRUNCATE,
+            mode,
+            ssh2::OpenType::File,
+        )
+        .expect("Tried to create binary on the remote");
+    std::io::copy(&mut file_to_upload, &mut file_uploader)
+        .expect("Tried to upload the file contents");
+    std::io::Write::flush(&mut file_uploader).expect("Tried to flush file uploader");
+    drop(file_uploader);
+
+    let mut channel = session.channel_session().unwrap();
+    channel.exec(&format!("file {}", to)).unwrap();
+    let mut standard_output = String::new();
+    std::io::Read::read_to_string(&mut channel, &mut standard_output)
+        .expect("Tried to read standard output");
+    println!("{}", standard_output);
+    channel.wait_close().expect("Waited for close");
+    assert_eq!(0, channel.exit_status().unwrap());
+}
+
 async fn deploy(
     repository: &std::path::Path,
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
@@ -886,19 +935,6 @@ async fn deploy(
     }
     session.userauth_password(&ssh_user, &ssh_password).unwrap();
     assert!(session.authenticated());
-
-    let binary = repository
-        .join("target")
-        .join(RASPBERRY_PI_TARGET_NAME)
-        .join("release")
-        .join(MANAGEMENT_SERVICE_NAME);
-    let mut file_to_upload =
-        std::fs::File::open(&binary).expect("Tried to open the binary to upload");
-    let file_size = file_to_upload
-        .metadata()
-        .expect("Tried to determine the file size")
-        .file_size();
-    println!("Uploading file with {} bytes", file_size);
 
     let sftp = session.sftp().expect("Tried to open SFTP");
     let home = relative_path::RelativePath::new("/home").join(ssh_user);
@@ -928,35 +964,40 @@ async fn deploy(
         }
     }
 
+    let binary = repository
+        .join("target")
+        .join(RASPBERRY_PI_TARGET_NAME)
+        .join("release")
+        .join(MANAGEMENT_SERVICE_NAME);
     let remote_management_service_binary = nonlocality_dir.join(MANAGEMENT_SERVICE_NAME);
-    let mut file_uploader = sftp
-        .open_mode(
-            &to_std_path(&remote_management_service_binary),
-            OpenFlags::WRITE | OpenFlags::TRUNCATE,
-            0o755,
-            ssh2::OpenType::File,
-        )
-        .expect("Tried to create binary on the remote");
-    std::io::copy(&mut file_to_upload, &mut file_uploader)
-        .expect("Tried to upload the file contents");
-    std::io::Write::flush(&mut file_uploader).expect("Tried to flush file uploader");
-    drop(file_uploader);
+    upload_file(
+        &session,
+        &sftp,
+        &binary,
+        &remote_management_service_binary,
+        true,
+    );
 
-    let mut channel = session.channel_session().unwrap();
-    channel
-        .exec(&format!("file {}", remote_management_service_binary))
-        .unwrap();
-    let mut standard_output = String::new();
-    std::io::Read::read_to_string(&mut channel, &mut standard_output)
-        .expect("Tried to read standard output");
-    println!("{}", standard_output);
-    channel.wait_close().expect("Waited for close");
-    assert_eq!(0, channel.exit_status().unwrap());
+    let local_configuration = where_cluster_configuration(repository);
+    let remote_configuration = nonlocality_dir.join("cluster_configuration");
+    upload_file(
+        &session,
+        &sftp,
+        &local_configuration,
+        &remote_configuration,
+        false,
+    );
+
+    let filesystem_access_root = nonlocality_dir.join("filesystem_access");
 
     println!("Starting {}", &remote_management_service_binary);
     let mut channel: ssh2::Channel = session.channel_session().unwrap();
+    let sudo = RelativePath::new("/usr/bin/sudo");
     channel
-        .exec(&format!("{}", remote_management_service_binary))
+        .exec(&format!(
+            "{} {} {} --filesystem_access_root {} --install",
+            sudo, remote_management_service_binary, remote_configuration, filesystem_access_root
+        ))
         .expect("Tried exec");
 
     let mut standard_output = String::new();
@@ -980,7 +1021,7 @@ async fn deploy(
     channel.wait_close().expect("Waited for close");
     let exit_code = channel.exit_status().unwrap();
     println!("Exit code: {}", exit_code);
-    assert_eq!(101, exit_code);
+    assert_eq!(0, exit_code);
 
     NumberOfErrors(0)
 }
