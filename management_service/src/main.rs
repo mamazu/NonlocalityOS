@@ -1310,7 +1310,7 @@ WantedBy=multi-user.target
     let root_directory = std::path::Path::new("/");
     run_process(root_directory, systemctl, &["daemon-reload"]).await;
     run_process(root_directory, systemctl, &["enable", service_file_name]).await;
-    run_process(root_directory, systemctl, &["start", service_file_name]).await;
+    run_process(root_directory, systemctl, &["restart", service_file_name]).await;
     run_process(root_directory, systemctl, &["status", service_file_name]).await;
 }
 

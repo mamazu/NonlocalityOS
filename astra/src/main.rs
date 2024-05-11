@@ -915,6 +915,35 @@ fn upload_file(
     assert_eq!(0, channel.exit_status().unwrap());
 }
 
+async fn run_simple_ssh_command(session: &ssh2::Session, command: &str) {
+    println!("Running {}", command);
+    let mut channel: ssh2::Channel = session.channel_session().unwrap();
+    channel.exec(command).expect("Tried exec");
+
+    let mut standard_output = String::new();
+    let standard_output_stream_id = 0;
+    std::io::Read::read_to_string(
+        &mut channel.stream(standard_output_stream_id),
+        &mut standard_output,
+    )
+    .expect("Tried to read standard output");
+    println!("Standard output: {}", standard_output);
+
+    let mut standard_error = String::new();
+    let standard_error_stream_id = ssh2::EXTENDED_DATA_STDERR;
+    std::io::Read::read_to_string(
+        &mut channel.stream(standard_error_stream_id),
+        &mut standard_error,
+    )
+    .expect("Tried to read standard error");
+    println!("Standard error: {}", standard_error);
+
+    channel.wait_close().expect("Waited for close");
+    let exit_code = channel.exit_status().unwrap();
+    println!("Exit code: {}", exit_code);
+    assert_eq!(0, exit_code);
+}
+
 async fn deploy(
     repository: &std::path::Path,
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
@@ -970,14 +999,26 @@ async fn deploy(
         .join(RASPBERRY_PI_TARGET_NAME)
         .join("release")
         .join(MANAGEMENT_SERVICE_NAME);
-    let remote_management_service_binary = nonlocality_dir.join(MANAGEMENT_SERVICE_NAME);
+    let remote_management_service_binary_next =
+        nonlocality_dir.join(&format!("{}.next", MANAGEMENT_SERVICE_NAME));
     upload_file(
         &session,
         &sftp,
         &binary,
-        &remote_management_service_binary,
+        &remote_management_service_binary_next,
         true,
     );
+    let remote_management_service_binary = nonlocality_dir.join(MANAGEMENT_SERVICE_NAME);
+    // Sftp.rename doesn't work (error "4", and it's impossible to find documentation on what "4" means).
+    run_simple_ssh_command(
+        &session,
+        // TODO: encode command line arguments correctly
+        &format!(
+            "/usr/bin/mv {} {}",
+            &remote_management_service_binary_next, &remote_management_service_binary
+        ),
+    )
+    .await;
 
     let local_configuration = where_cluster_configuration(repository);
     let remote_configuration = nonlocality_dir.join("cluster_configuration");
@@ -990,39 +1031,15 @@ async fn deploy(
     );
 
     let filesystem_access_root = nonlocality_dir.join("filesystem_access");
-
-    println!("Starting {}", &remote_management_service_binary);
-    let mut channel: ssh2::Channel = session.channel_session().unwrap();
     let sudo = RelativePath::new("/usr/bin/sudo");
-    channel
-        .exec(&format!(
+    run_simple_ssh_command(
+        &session,
+        &format!(
             "{} {} {} --filesystem_access_root {} --install",
             sudo, remote_management_service_binary, remote_configuration, filesystem_access_root
-        ))
-        .expect("Tried exec");
-
-    let mut standard_output = String::new();
-    let standard_output_stream_id = 0;
-    std::io::Read::read_to_string(
-        &mut channel.stream(standard_output_stream_id),
-        &mut standard_output,
+        ),
     )
-    .expect("Tried to read standard output");
-    println!("Standard output: {}", standard_output);
-
-    let mut standard_error = String::new();
-    let standard_error_stream_id = ssh2::EXTENDED_DATA_STDERR;
-    std::io::Read::read_to_string(
-        &mut channel.stream(standard_error_stream_id),
-        &mut standard_error,
-    )
-    .expect("Tried to read standard error");
-    println!("Standard error: {}", standard_error);
-
-    channel.wait_close().expect("Waited for close");
-    let exit_code = channel.exit_status().unwrap();
-    println!("Exit code: {}", exit_code);
-    assert_eq!(0, exit_code);
+    .await;
 
     NumberOfErrors(0)
 }
