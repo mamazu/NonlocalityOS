@@ -879,6 +879,7 @@ fn upload_file(
     to: &RelativePath,
     is_executable: bool,
 ) {
+    println!("Uploading {} to {}", from.display(), to);
     let mut file_to_upload =
         std::fs::File::open(&from).expect("Tried to open the binary to upload");
     let file_size = file_to_upload
