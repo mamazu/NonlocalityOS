@@ -954,19 +954,27 @@ async fn deploy(
     assert_eq!(0, channel.exit_status().unwrap());
 
     println!("Starting {}", &remote_management_service_binary);
-    let mut channel = session.channel_session().unwrap();
+    let mut channel: ssh2::Channel = session.channel_session().unwrap();
     channel
         .exec(&format!("{}", remote_management_service_binary))
         .expect("Tried exec");
 
     let mut standard_output = String::new();
-    std::io::Read::read_to_string(&mut channel, &mut standard_output)
-        .expect("Tried to read standard output");
+    let standard_output_stream_id = 0;
+    std::io::Read::read_to_string(
+        &mut channel.stream(standard_output_stream_id),
+        &mut standard_output,
+    )
+    .expect("Tried to read standard output");
     println!("Standard output: {}", standard_output);
 
     let mut standard_error = String::new();
-    std::io::Read::read_to_string(&mut channel.stderr(), &mut standard_error)
-        .expect("Tried to read standard error");
+    let standard_error_stream_id = ssh2::EXTENDED_DATA_STDERR;
+    std::io::Read::read_to_string(
+        &mut channel.stream(standard_error_stream_id),
+        &mut standard_error,
+    )
+    .expect("Tried to read standard error");
     println!("Standard error: {}", standard_error);
 
     channel.wait_close().expect("Waited for close");
