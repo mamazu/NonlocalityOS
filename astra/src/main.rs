@@ -946,9 +946,10 @@ async fn deploy(
     channel
         .exec(&format!("file {}", remote_management_service_binary))
         .unwrap();
-    let mut s = String::new();
-    std::io::Read::read_to_string(&mut channel, &mut s).unwrap();
-    println!("{}", s);
+    let mut standard_output = String::new();
+    std::io::Read::read_to_string(&mut channel, &mut standard_output)
+        .expect("Tried to read standard output");
+    println!("{}", standard_output);
     channel.wait_close().expect("Waited for close");
     assert_eq!(0, channel.exit_status().unwrap());
 
@@ -956,12 +957,22 @@ async fn deploy(
     let mut channel = session.channel_session().unwrap();
     channel
         .exec(&format!("{}", remote_management_service_binary))
-        .unwrap();
-    let mut s = String::new();
-    std::io::Read::read_to_string(&mut channel, &mut s).unwrap();
-    println!("{}", s);
+        .expect("Tried exec");
+
+    let mut standard_output = String::new();
+    std::io::Read::read_to_string(&mut channel, &mut standard_output)
+        .expect("Tried to read standard output");
+    println!("Standard output: {}", standard_output);
+
+    let mut standard_error = String::new();
+    std::io::Read::read_to_string(&mut channel.stderr(), &mut standard_error)
+        .expect("Tried to read standard error");
+    println!("Standard error: {}", standard_error);
+
     channel.wait_close().expect("Waited for close");
-    assert_eq!(101, channel.exit_status().unwrap());
+    let exit_code = channel.exit_status().unwrap();
+    println!("Exit code: {}", exit_code);
+    assert_eq!(101, exit_code);
 
     NumberOfErrors(0)
 }
