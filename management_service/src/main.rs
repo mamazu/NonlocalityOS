@@ -1316,25 +1316,27 @@ WantedBy=multi-user.target
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
-    let mut filesystem_access: Option<String> = None;
-    let mut cluster_configuration = "Something".to_string();
+    let mut maybe_filesystem_access: Option<String> = None;
+    let mut maybe_cluster_configuration: Option<String> = None;
     let mut is_install_mode = false;
     {
-        // this block limits scope of borrows by ap.refer() method
         let mut argument_parser = argparse::ArgumentParser::new();
         argument_parser.set_description("NonlocalityOS management service");
         argument_parser
-            .refer(&mut cluster_configuration)
+            .refer(&mut maybe_cluster_configuration)
             .add_argument(
                 "cluster_configuration",
-                argparse::Store,
-                "Path to where the cluster configuration file should be generated to.",
+                argparse::StoreOption,
+                "Path to where the cluster configuration file should be loaded from initially.",
+            )
+            .required();
+        argument_parser
+            .refer(&mut maybe_filesystem_access)
+            .add_option(
+                &["--filesystem_access_root"],
+                argparse::StoreOption,
+                "Path to where filesystem access should be stored.",
             );
-        argument_parser.refer(&mut filesystem_access).add_option(
-            &["--filesystem_access_root"],
-            argparse::StoreOption,
-            "Path to where filesystem access should be stored.",
-        );
         argument_parser.refer(&mut is_install_mode).add_option(
             &["--install"],
             argparse::StoreTrue,
@@ -1350,8 +1352,10 @@ async fn main() -> ExitCode {
         }
     }
 
+    let cluster_configuration =
+        maybe_cluster_configuration.expect("required by the command line arguments");
     let cluster_configuration_file_path = Path::new(&cluster_configuration);
-    let filesystem_access_root = match filesystem_access {
+    let filesystem_access_root = match maybe_filesystem_access {
         Some(ref path) => Some(Path::new(path)),
         None => None,
     };
