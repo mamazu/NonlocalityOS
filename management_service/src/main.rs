@@ -375,6 +375,7 @@ impl WasiFile for TcpSslConnection {
         &self,
         bufs: &[std::io::IoSlice<'a>],
     ) -> Result<u64, wasi_common::Error> {
+        println!("SSL stream begin write");
         let mut writer = match self.ssl_stream.lock() {
             Ok(result) => result,
             Err(error) => {
@@ -383,7 +384,10 @@ impl WasiFile for TcpSslConnection {
             }
         };
         match writer.write_vectored(bufs) {
-            Ok(written) => Ok(written as u64),
+            Ok(written) => {
+                println!("SSL stream end write: {}", written);
+                Ok(written as u64)
+            }
             Err(error) => {
                 println!("Writing to the SSL stream failed with {}", error);
                 Err(wasi_common::Error::io())
@@ -395,6 +399,7 @@ impl WasiFile for TcpSslConnection {
         &self,
         bufs: &mut [std::io::IoSliceMut<'a>],
     ) -> Result<u64, wasi_common::Error> {
+        println!("SSL stream begin read");
         let mut reader = match self.ssl_stream.lock() {
             Ok(result) => result,
             Err(error) => {
@@ -403,7 +408,10 @@ impl WasiFile for TcpSslConnection {
             }
         };
         match reader.read_vectored(bufs) {
-            Ok(read) => Ok(read as u64),
+            Ok(read) => {
+                println!("SSL stream end read: {}", read);
+                Ok(read as u64)
+            }
             Err(error) => Err(wasi_common::Error::from(error)),
         }
     }
@@ -572,19 +580,22 @@ fn run_wasi_process(
              host_length: i32,
              port: i32|
              -> i32 {
-                let mem = match caller.get_export("memory") {
-                    Some(Extern::Memory(mem)) => mem,
+                let memory = match caller.get_export("memory") {
+                    Some(Extern::SharedMemory(mem)) => mem,
                     _ => {
                         println!("failed to find host memory");
                         return -1;
                     }
                 };
-                let data = mem
-                    .data(&caller)
+                let host_length_checked = host_length as usize;
+                let data = memory
+                    .data()
                     .get(host as u32 as usize..)
-                    .and_then(|arr| arr.get(..host_length as usize));
+                    .and_then(|arr| arr.get(..host_length_checked));
                 let checked_host = match data {
-                    Some(data) => match std::str::from_utf8(data) {
+                    Some(data) => match std::str::from_utf8(unsafe {
+                        core::slice::from_raw_parts(data[0].get(), host_length_checked)
+                    }) {
                         Ok(s) => s,
                         Err(error) => {
                             println!("nonlocality_tcp_ssl_handshake host is not UTF-8: {}", error);

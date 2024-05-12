@@ -16,7 +16,7 @@ extern "C" {
     pub fn nonlocality_connect(interface: i32) -> i32;
     pub fn nonlocality_accept() -> u64;
     pub fn nonlocality_abort();
-    pub fn nonlocality_tcp_ssl_handshake(host: *const u8, host_length: u64, port: u16) -> i32;
+    pub fn nonlocality_tcp_ssl_handshake(host: *const u8, host_length: i32, port: i32) -> i32;
 }
 
 pub struct Accepted {
@@ -43,7 +43,8 @@ pub fn connect(interface: i32) -> File {
 }
 
 pub fn tcp_ssl_handshake(host: &str, port: u16) -> std::io::Result<File> {
-    let result = unsafe { nonlocality_tcp_ssl_handshake(host.as_ptr(), host.len() as u64, port) };
+    let result =
+        unsafe { nonlocality_tcp_ssl_handshake(host.as_ptr(), host.len() as i32, port as i32) };
     if result < 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
