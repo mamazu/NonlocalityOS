@@ -14,11 +14,13 @@ use management_interface::OutgoingInterfaceId;
 use management_interface::ServiceId;
 use os_pipe::{pipe, PipeReader, PipeWriter};
 use promising_future::{future_promise, Promise};
+use rustls::RootCertStore;
 use std::any::Any;
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::Read;
 use std::io::Write;
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -29,6 +31,7 @@ use wasi_common::sync::WasiCtxBuilder;
 use wasi_common::ErrorExt;
 use wasi_common::{WasiCtx, WasiFile};
 use wasmtime::Config;
+use wasmtime::Extern;
 use wasmtime::{Caller, Engine, Linker, Module, Store};
 use wasmtime_wasi_threads::WasiThreadsCtx;
 
@@ -354,6 +357,28 @@ fn test_encode_i32_pair() {
     assert_eq!(9223372034707292160, encode_i32_pair(i32::MAX, i32::MIN));
 }
 
+fn tcp_ssl_handshake(host: &str, port: u16) -> i32 {
+    println!("nonlocality_tcp_ssl_handshake({}, {})", host, port);
+    // TODO: check if host/port is allowed
+    let root_store = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+    };
+    let mut config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    config.key_log = Arc::new(rustls::KeyLogFile::new());
+    let server_name = host.to_string().try_into().unwrap();
+    let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name).unwrap();
+    let mut sock = TcpStream::connect((host, port)).unwrap();
+    let _tls = rustls::Stream::new(&mut conn, &mut sock);
+    todo!();
+}
+
+#[test]
+fn test_tcp_ssl_handshake() {
+    assert_eq!(-1, tcp_ssl_handshake("example.org", 0));
+}
+
 fn run_wasi_process(
     engine: Engine,
     module: Module,
@@ -462,6 +487,44 @@ fn run_wasi_process(
             },
         )
         .expect("Tried to define nonlocality_abort");
+
+    linker
+        .func_wrap(
+            "env",
+            "nonlocality_tcp_ssl_handshake",
+            |mut caller: Caller<'_, InterServiceFuncContext>,
+             host: i32,
+             host_length: i32,
+             port: i32|
+             -> i32 {
+                let mem = match caller.get_export("memory") {
+                    Some(Extern::Memory(mem)) => mem,
+                    _ => {
+                        println!("failed to find host memory");
+                        return -1;
+                    }
+                };
+                let data = mem
+                    .data(&caller)
+                    .get(host as u32 as usize..)
+                    .and_then(|arr| arr.get(..host_length as usize));
+                let checked_host = match data {
+                    Some(data) => match std::str::from_utf8(data) {
+                        Ok(s) => s,
+                        Err(error) => {
+                            println!("nonlocality_tcp_ssl_handshake host is not UTF-8: {}", error);
+                            return -1;
+                        }
+                    },
+                    None => {
+                        println!("nonlocality_tcp_ssl_handshake host/length out of bounds");
+                        return -1;
+                    }
+                };
+                tcp_ssl_handshake(checked_host, port as u16)
+            },
+        )
+        .expect("Tried to define nonlocality_tcp_ssl_handshake");
 
     let mut func_context_store = Store::new(
         &engine,

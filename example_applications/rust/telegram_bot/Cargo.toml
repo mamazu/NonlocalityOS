@@ -7,5 +7,3 @@ edition = "2021"
 
 [dependencies]
 nonlocality_env = { path ="../../../nonlocality_env" }
-frankenstein = { version = "0.30", features = [ ]}
-ureq = "2"
