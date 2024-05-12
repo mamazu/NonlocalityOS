@@ -71,7 +71,7 @@ impl WasiFile for InterServiceApiStream {
 
     async fn write_vectored<'a>(
         &self,
-        _bufs: &[std::io::IoSlice<'a>],
+        bufs: &[std::io::IoSlice<'a>],
     ) -> Result<u64, wasi_common::Error> {
         let mut writer = match self.writer.lock() {
             Ok(result) => result,
@@ -80,7 +80,7 @@ impl WasiFile for InterServiceApiStream {
                 return Err(wasi_common::Error::not_supported());
             }
         };
-        match writer.write_vectored(_bufs) {
+        match writer.write_vectored(bufs) {
             Ok(written) => Ok(written as u64),
             Err(error) => {
                 println!("Writing to pipe failed with {}", error);
@@ -91,7 +91,7 @@ impl WasiFile for InterServiceApiStream {
 
     async fn read_vectored<'a>(
         &self,
-        _bufs: &mut [std::io::IoSliceMut<'a>],
+        bufs: &mut [std::io::IoSliceMut<'a>],
     ) -> Result<u64, wasi_common::Error> {
         let mut reader = match self.reader.lock() {
             Ok(result) => result,
@@ -100,7 +100,7 @@ impl WasiFile for InterServiceApiStream {
                 return Err(wasi_common::Error::not_supported());
             }
         };
-        match reader.read_vectored(_bufs) {
+        match reader.read_vectored(bufs) {
             Ok(read) => Ok(read as u64),
             Err(error) => Err(wasi_common::Error::from(error)),
         }
@@ -357,7 +357,59 @@ fn test_encode_i32_pair() {
     assert_eq!(9223372034707292160, encode_i32_pair(i32::MAX, i32::MIN));
 }
 
-fn tcp_ssl_handshake(host: &str, port: u16) -> i32 {
+struct TcpSslConnection {
+    ssl_stream: Mutex<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>,
+}
+
+#[wiggle::async_trait]
+impl WasiFile for TcpSslConnection {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    async fn get_filetype(&self) -> Result<FileType, wasi_common::Error> {
+        Ok(FileType::SocketStream)
+    }
+
+    async fn write_vectored<'a>(
+        &self,
+        bufs: &[std::io::IoSlice<'a>],
+    ) -> Result<u64, wasi_common::Error> {
+        let mut writer = match self.ssl_stream.lock() {
+            Ok(result) => result,
+            Err(error) => {
+                println!("Could not lock the SSL stream: {}.", error);
+                return Err(wasi_common::Error::not_supported());
+            }
+        };
+        match writer.write_vectored(bufs) {
+            Ok(written) => Ok(written as u64),
+            Err(error) => {
+                println!("Writing to the SSL stream failed with {}", error);
+                Err(wasi_common::Error::io())
+            }
+        }
+    }
+
+    async fn read_vectored<'a>(
+        &self,
+        bufs: &mut [std::io::IoSliceMut<'a>],
+    ) -> Result<u64, wasi_common::Error> {
+        let mut reader = match self.ssl_stream.lock() {
+            Ok(result) => result,
+            Err(error) => {
+                println!("Could not lock the SSL stream: {}.", error);
+                return Err(wasi_common::Error::not_supported());
+            }
+        };
+        match reader.read_vectored(bufs) {
+            Ok(read) => Ok(read as u64),
+            Err(error) => Err(wasi_common::Error::from(error)),
+        }
+    }
+}
+
+fn tcp_ssl_handshake(host: &str, port: u16) -> Option<TcpSslConnection> {
     println!("nonlocality_tcp_ssl_handshake({}, {})", host, port);
     // TODO: check if host/port is allowed
     let root_store = RootCertStore {
@@ -367,16 +419,39 @@ fn tcp_ssl_handshake(host: &str, port: u16) -> i32 {
         .with_root_certificates(root_store)
         .with_no_client_auth();
     config.key_log = Arc::new(rustls::KeyLogFile::new());
-    let server_name = host.to_string().try_into().unwrap();
-    let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name).unwrap();
-    let mut sock = TcpStream::connect((host, port)).unwrap();
-    let _tls = rustls::Stream::new(&mut conn, &mut sock);
-    todo!();
+    let server_name = match host.to_string().try_into() {
+        Ok(success) => success,
+        Err(error) => {
+            println!("Could not create server name from {}: {}", host, error);
+            return None;
+        }
+    };
+    let client_connection: rustls::ClientConnection =
+        match rustls::ClientConnection::new(Arc::new(config), server_name) {
+            Ok(success) => success,
+            Err(error) => {
+                println!("Could not create client connection: {}", error);
+                return None;
+            }
+        };
+    let socket: TcpStream = match TcpStream::connect((host, port)) {
+        Ok(success) => success,
+        Err(error) => {
+            println!("Could not connect to {}:{}: {}", host, port, error);
+            return None;
+        }
+    };
+    let tls_stream: rustls::StreamOwned<rustls::ClientConnection, TcpStream> =
+        rustls::StreamOwned::new(client_connection, socket);
+    Some(TcpSslConnection {
+        ssl_stream: Mutex::new(tls_stream),
+    })
 }
 
 #[test]
 fn test_tcp_ssl_handshake() {
-    assert_eq!(-1, tcp_ssl_handshake("example.org", 0));
+    let result = tcp_ssl_handshake("example.org", 0);
+    assert!(result.is_none());
 }
 
 fn run_wasi_process(
@@ -521,7 +596,16 @@ fn run_wasi_process(
                         return -1;
                     }
                 };
-                tcp_ssl_handshake(checked_host, port as u16)
+                let stream = match tcp_ssl_handshake(checked_host, port as u16) {
+                    Some(success) => success,
+                    None => return -1,
+                };
+                let context = caller.data();
+                let stream_fd = context
+                    .wasi
+                    .push_file(Box::new(stream), FileAccessMode::all())
+                    .unwrap() as i32;
+                stream_fd
             },
         )
         .expect("Tried to define nonlocality_tcp_ssl_handshake");
