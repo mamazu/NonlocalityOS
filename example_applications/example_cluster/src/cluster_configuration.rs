@@ -1,4 +1,6 @@
 use management_interface::Blob;
+use nonlocality_build_utils::wasi::WASIP1_TARGET;
+use nonlocality_build_utils::wasi::WASIP1_THREADS_TARGET;
 use std::collections::BTreeMap;
 use tokio::io::AsyncReadExt;
 
@@ -28,6 +30,7 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
     let idle_service_id = ServiceId(7);
     let log_server_id = ServiceId(8);
     let log_client_id = ServiceId(9);
+    let telegram_bot_id = ServiceId(10);
 
     ClusterConfiguration {
         services: vec![
@@ -36,7 +39,8 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                 label: "Hello world service".to_string(),
                 outgoing_interfaces: BTreeMap::new(),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasi/release/hello_rust.wasm")).await,
+                    code: read_blob(&target.join(WASIP1_TARGET).join("release/hello_rust.wasm"))
+                        .await,
                     has_threads: false,
                 },
                 filesystem_dir_unique_id: None,
@@ -47,7 +51,9 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                 outgoing_interfaces: BTreeMap::new(),
                 wasi: WasiProcess {
                     code: read_blob(
-                        &target.join("wasm32-wasip1-threads/release/essrpc_server.wasm"),
+                        &target
+                            .join(WASIP1_THREADS_TARGET)
+                            .join("release/essrpc_server.wasm"),
                     )
                     .await,
                     has_threads: true,
@@ -62,7 +68,12 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                     IncomingInterface::new(essrpc_server_id, IncomingInterfaceId(0)),
                 )]),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasi/release/essrpc_client.wasm")).await,
+                    code: read_blob(
+                        &target
+                            .join(WASIP1_TARGET)
+                            .join("release/essrpc_client.wasm"),
+                    )
+                    .await,
                     has_threads: false,
                 },
                 filesystem_dir_unique_id: None,
@@ -72,7 +83,8 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                 label: "Provide API".to_string(),
                 outgoing_interfaces: BTreeMap::new(),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasi/release/provide_api.wasm")).await,
+                    code: read_blob(&target.join(WASIP1_TARGET).join("release/provide_api.wasm"))
+                        .await,
                     has_threads: false,
                 },
                 filesystem_dir_unique_id: None,
@@ -85,7 +97,8 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                     IncomingInterface::new(provide_api_id, IncomingInterfaceId(0)),
                 )]),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasi/release/call_api.wasm")).await,
+                    code: read_blob(&target.join(WASIP1_TARGET).join("release/call_api.wasm"))
+                        .await,
                     has_threads: false,
                 },
                 filesystem_dir_unique_id: None,
@@ -96,7 +109,9 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                 outgoing_interfaces: BTreeMap::new(),
                 wasi: WasiProcess {
                     code: read_blob(
-                        &target.join("wasm32-wasip1-threads/release/database_server.wasm"),
+                        &target
+                            .join(WASIP1_THREADS_TARGET)
+                            .join("release/database_server.wasm"),
                     )
                     .await,
                     has_threads: true,
@@ -111,7 +126,12 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                     IncomingInterface::new(database_server_id, IncomingInterfaceId(0)),
                 )]),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasi/release/database_client.wasm")).await,
+                    code: read_blob(
+                        &target
+                            .join(WASIP1_TARGET)
+                            .join("release/database_client.wasm"),
+                    )
+                    .await,
                     has_threads: false,
                 },
                 filesystem_dir_unique_id: None,
@@ -121,7 +141,8 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                 label: "Idle Service".to_string(),
                 outgoing_interfaces: BTreeMap::new(),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasi/release/idle_service.wasm")).await,
+                    code: read_blob(&target.join(WASIP1_TARGET).join("release/idle_service.wasm"))
+                        .await,
                     has_threads: false,
                 },
                 filesystem_dir_unique_id: None,
@@ -131,8 +152,12 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                 label: "Logger Server".to_string(),
                 outgoing_interfaces: BTreeMap::new(),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasip1-threads/release/log_server.wasm"))
-                        .await,
+                    code: read_blob(
+                        &target
+                            .join(WASIP1_THREADS_TARGET)
+                            .join("release/log_server.wasm"),
+                    )
+                    .await,
                     has_threads: true,
                 },
                 filesystem_dir_unique_id: Some("example_logger".to_string()),
@@ -145,8 +170,24 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                     IncomingInterface::new(log_server_id, IncomingInterfaceId(0)),
                 )]),
                 wasi: WasiProcess {
-                    code: read_blob(&target.join("wasm32-wasi/release/log_client.wasm")).await,
+                    code: read_blob(&target.join(WASIP1_TARGET).join("release/log_client.wasm"))
+                        .await,
                     has_threads: false,
+                },
+                filesystem_dir_unique_id: None,
+            },
+            Service {
+                id: telegram_bot_id,
+                label: "Telegram Bot".to_string(),
+                outgoing_interfaces: BTreeMap::from([]),
+                wasi: WasiProcess {
+                    code: read_blob(
+                        &target
+                            .join(WASIP1_THREADS_TARGET)
+                            .join("release/telegram_bot.wasm"),
+                    )
+                    .await,
+                    has_threads: true,
                 },
                 filesystem_dir_unique_id: None,
             },

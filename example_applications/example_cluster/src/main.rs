@@ -15,7 +15,9 @@ use nonlocality_build_utils::run::NumberOfErrors;
 use nonlocality_build_utils::run::ReportProgress;
 use nonlocality_build_utils::wasi::install_wasi_cpp_compiler;
 use nonlocality_build_utils::wasi::run_cargo_build_wasi_threads;
-use nonlocality_build_utils::wasi::WasiThreadsTarget;
+use nonlocality_build_utils::wasi::WasiSdk;
+use nonlocality_build_utils::wasi::WASIP1_TARGET;
+use nonlocality_build_utils::wasi::WASIP1_THREADS_TARGET;
 use postcard::to_allocvec;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -26,7 +28,7 @@ pub mod cluster_configuration;
 enum CargoBuildTarget {
     Host,
     Wasi,
-    WasiThreads(WasiThreadsTarget),
+    WasiThreads(WasiSdk),
 }
 
 #[derive(Clone)]
@@ -47,7 +49,7 @@ impl Program {
         }
     }
 
-    pub fn wasi_threads(threads: WasiThreadsTarget) -> Program {
+    pub fn wasi_threads(threads: WasiSdk) -> Program {
         Program {
             targets: vec![CargoBuildTarget::WasiThreads(threads)],
         }
@@ -91,13 +93,13 @@ async fn run_cargo_build(
     match target {
         CargoBuildTarget::Host => run_cargo_build_for_host(project, progress_reporter).await,
         CargoBuildTarget::Wasi => {
-            run_cargo_build_target_name(project, "wasm32-wasi", progress_reporter).await
+            run_cargo_build_target_name(project, WASIP1_TARGET, progress_reporter).await
         }
         CargoBuildTarget::WasiThreads(threads) => {
             run_cargo_build_wasi_threads(
                 project,
                 &threads.wasi_sdk,
-                "wasm32-wasip1-threads",
+                WASIP1_THREADS_TARGET,
                 progress_reporter,
             )
             .await
@@ -203,7 +205,7 @@ async fn build_recursively(
 async fn install_tools(
     repository: &std::path::Path,
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
-) -> (NumberOfErrors, Option<WasiThreadsTarget>) {
+) -> (NumberOfErrors, Option<WasiSdk>) {
     let tools_directory = repository.join("tools");
     std::fs::create_dir_all(&tools_directory).expect("create tools directory");
 
@@ -246,7 +248,7 @@ async fn build(
     repository: &std::path::Path,
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
-    let (mut error_count, maybe_wasi_threads) = install_tools(repository, &progress_reporter).await;
+    let (mut error_count, maybe_wasi_sdk) = install_tools(repository, &progress_reporter).await;
     error_count += run_cargo_fmt(&repository, &progress_reporter).await;
 
     let coverage_directory = repository.join("coverage");
@@ -300,9 +302,9 @@ async fn build(
                                     ),
                                     (
                                         "database_server".to_string(),
-                                        DirectoryEntry::Program(match maybe_wasi_threads {
-                                            Some(ref wasi_threads) => {
-                                                Program::wasi_threads(wasi_threads.clone())
+                                        DirectoryEntry::Program(match maybe_wasi_sdk {
+                                            Some(ref wasi_sdk) => {
+                                                Program::wasi_threads(wasi_sdk.clone())
                                             }
                                             None => Program::other(),
                                         }),
@@ -324,9 +326,9 @@ async fn build(
                                     ),
                                     (
                                         "essrpc_server".to_string(),
-                                        DirectoryEntry::Program(match maybe_wasi_threads {
-                                            Some(ref wasi_threads) => {
-                                                Program::wasi_threads(wasi_threads.clone())
+                                        DirectoryEntry::Program(match maybe_wasi_sdk {
+                                            Some(ref wasi_sdk) => {
+                                                Program::wasi_threads(wasi_sdk.clone())
                                             }
                                             None => Program::other(),
                                         }),
@@ -348,9 +350,9 @@ async fn build(
                                     ),
                                     (
                                         "log_server".to_string(),
-                                        DirectoryEntry::Program(match maybe_wasi_threads {
-                                            Some(ref wasi_threads) => {
-                                                Program::wasi_threads(wasi_threads.clone())
+                                        DirectoryEntry::Program(match maybe_wasi_sdk {
+                                            Some(ref wasi_sdk) => {
+                                                Program::wasi_threads(wasi_sdk.clone())
                                             }
                                             None => Program::other(),
                                         }),
@@ -373,6 +375,13 @@ async fn build(
                         (
                             "provide_api".to_string(),
                             DirectoryEntry::Program(Program::wasi()),
+                        ),
+                        (
+                            "telegram_bot".to_string(),
+                            DirectoryEntry::Program(match maybe_wasi_sdk {
+                                Some(ref wasi_sdk) => Program::wasi_threads(wasi_sdk.clone()),
+                                None => Program::other(),
+                            }),
                         ),
                     ]),
                 }),

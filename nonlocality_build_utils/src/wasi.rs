@@ -6,15 +6,18 @@ use crate::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+pub const WASIP1_TARGET: &str = "wasm32-wasip1";
+pub const WASIP1_THREADS_TARGET: &str = "wasm32-wasip1-threads";
+
 #[derive(Clone)]
-pub struct WasiThreadsTarget {
+pub struct WasiSdk {
     pub wasi_sdk: std::path::PathBuf,
 }
 
 pub async fn install_wasi_cpp_compiler(
     tools_directory: &std::path::Path,
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
-) -> (NumberOfErrors, Option<WasiThreadsTarget>) {
+) -> (NumberOfErrors, Option<WasiSdk>) {
     let compiler_name = "wasi-sdk-22";
     let archive_file_name = format!("{}.0.m-mingw.tar.gz", compiler_name);
     let download_url = format!(
@@ -31,10 +34,7 @@ pub async fn install_wasi_cpp_compiler(
         Ok(_) => {
             let sub_dir = unpacked_directory.join(format!("{}.0+m", compiler_name));
             if confirm_directory(&sub_dir) {
-                (
-                    NumberOfErrors(0),
-                    Some(WasiThreadsTarget { wasi_sdk: sub_dir }),
-                )
+                (NumberOfErrors(0), Some(WasiSdk { wasi_sdk: sub_dir }))
             } else {
                 (NumberOfErrors(1), None)
             }
@@ -73,7 +73,10 @@ pub async fn run_cargo_build_wasi_threads(
     run_process_with_error_only_output(&project, std::path::Path::new(
          "cargo"), &["build", "--verbose", "--release", "--target", target_name], &HashMap::from([
         ("CFLAGS".to_string(), "-pthread".to_string()),
-        ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32", lib_dir_str)),
+        ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32",
+          lib_dir_str)),
         (format!("CC_{}", target_name), clang_exe_str.to_string()),
+        // not sure if WASI_SDK_PATH does anything
+        ("WASI_SDK_PATH".to_string(), wasi_sdk.to_str().expect("convert WASI SDK path to a string").to_string())
     ]), progress_reporter).await
 }

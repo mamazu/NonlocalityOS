@@ -399,7 +399,7 @@ fn run_wasi_process(
                     Ok(success) => success,
                     Err(error) => {
                         println!("nonlocality_accept failed with {}.", error);
-                        return Ok(encode_i32_pair(i32::max_value(), i32::max_value()));
+                        return Ok(encode_i32_pair(i32::min_value(), i32::min_value()));
                     }
                 };
                 match accept_result {

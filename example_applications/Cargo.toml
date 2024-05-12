@@ -14,5 +14,6 @@ members=[
     "rust/hello_rust",
     "rust/idle_service",
     "rust/provide_api",
+    "rust/telegram_bot",
 ]
 resolver="2"
