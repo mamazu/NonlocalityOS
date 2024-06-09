@@ -2,6 +2,7 @@ use dav_server::{fakels::FakeLs, DavHandler};
 use dogbox_tree_editor::{DirectoryEntry, DirectoryEntryKind};
 use std::convert::Infallible;
 mod file_system;
+mod file_system_test;
 use file_system::DogBoxFileSystem;
 
 #[tokio::main]
