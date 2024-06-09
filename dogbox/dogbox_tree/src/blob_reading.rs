@@ -25,7 +25,7 @@ impl crate::reading::AsyncReadBlob for BlobOpenFile {}
 impl tokio::io::AsyncRead for BlobOpenFile {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        cx: &mut core::task::Context<'_>,
+        _cx: &mut core::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let copying = usize::min(buf.remaining(), self.content.len() - self.cursor);
@@ -38,13 +38,13 @@ impl tokio::io::AsyncRead for BlobOpenFile {
 }
 
 impl tokio::io::AsyncSeek for BlobOpenFile {
-    fn start_seek(self: Pin<&mut Self>, position: std::io::SeekFrom) -> std::io::Result<()> {
+    fn start_seek(self: Pin<&mut Self>, _position: std::io::SeekFrom) -> std::io::Result<()> {
         todo!()
     }
 
     fn poll_complete(
         self: Pin<&mut Self>,
-        cx: &mut core::task::Context<'_>,
+        _cx: &mut core::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<u64>> {
         todo!()
     }
@@ -156,6 +156,7 @@ impl dogbox_blob_layer::ReadBlob for DoNotUse {
 
 #[tokio::test]
 async fn test_blob_read_directory_enumerate_empty() {
+    use std::collections::BTreeMap;
     let directory = BlobReadDirectory {
         digest: BlobDigest::hash(&[]),
         tree: Mutex::new(Some(Arc::new(DirectoryTree::new(BTreeMap::new())))),

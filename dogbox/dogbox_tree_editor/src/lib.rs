@@ -1,6 +1,5 @@
 use async_stream::stream;
 use bytes::Buf;
-use relative_path::RelativePath;
 use std::{
     collections::{BTreeMap, VecDeque},
     pin::Pin,
@@ -503,6 +502,7 @@ async fn test_read_directory_on_closed_regular_file() {
 
 #[tokio::test]
 async fn test_read_directory_on_open_regular_file() {
+    use relative_path::RelativePath;
     let editor = TreeEditor::from_entries(vec![DirectoryEntry {
         name: "test.txt".to_string(),
         kind: DirectoryEntryKind::File(0),
@@ -512,9 +512,7 @@ async fn test_read_directory_on_open_regular_file() {
         .await
         .unwrap();
     let result = editor
-        .read_directory(NormalizedPath::new(relative_path::RelativePath::new(
-            "/test.txt",
-        )))
+        .read_directory(NormalizedPath::new(RelativePath::new("/test.txt")))
         .await;
     assert_eq!(Some(Error::CannotOpenRegularFileAsDirectory), result.err());
 }
@@ -522,13 +520,14 @@ async fn test_read_directory_on_open_regular_file() {
 #[tokio::test]
 async fn test_create_directory() {
     use futures::StreamExt;
+    use relative_path::RelativePath;
     let editor = TreeEditor::from_entries(vec![]);
     editor
         .create_directory(NormalizedPath::new(RelativePath::new("/test")))
         .await
         .unwrap();
     let mut reading = editor
-        .read_directory(NormalizedPath::new(relative_path::RelativePath::new("/")))
+        .read_directory(NormalizedPath::new(RelativePath::new("/")))
         .await
         .unwrap();
     let entry: DirectoryEntry = reading.next().await.unwrap();
@@ -546,15 +545,14 @@ async fn test_create_directory() {
 #[tokio::test]
 async fn test_read_created_directory() {
     use futures::StreamExt;
+    use relative_path::RelativePath;
     let editor = TreeEditor::from_entries(vec![]);
     editor
         .create_directory(NormalizedPath::new(RelativePath::new("/test")))
         .await
         .unwrap();
     let mut reading = editor
-        .read_directory(NormalizedPath::new(relative_path::RelativePath::new(
-            "/test",
-        )))
+        .read_directory(NormalizedPath::new(RelativePath::new("/test")))
         .await
         .unwrap();
     let end = reading.next().await;
@@ -564,6 +562,7 @@ async fn test_read_created_directory() {
 #[tokio::test]
 async fn test_nested_create_directory() {
     use futures::StreamExt;
+    use relative_path::RelativePath;
     let editor = TreeEditor::from_entries(vec![]);
     editor
         .create_directory(NormalizedPath::new(RelativePath::new("/test")))
