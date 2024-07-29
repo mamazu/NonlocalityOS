@@ -1,6 +1,7 @@
 # Setup
 
-* install Rust: https://www.rust-lang.org/learn/get-started (tested with Rust 1.78.0)
+* install Rust: https://www.rust-lang.org/learn/get-started (tested with Rust 1.80.0)
+* restart your terminal because *worse is better* or something
 
 ## Windows
 
