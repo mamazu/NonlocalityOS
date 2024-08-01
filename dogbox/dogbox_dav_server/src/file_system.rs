@@ -238,7 +238,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
             Ok(Box::pin(stream! {
                 while let Some(entry) = directory.next().await {
                     info!("Directory entry {:?}", entry);
-                    yield (Box::new(DogBoxDirEntry{info: entry,}) as Box<dyn dav_server::fs::DavDirEntry>);
+                    yield Ok(Box::new(DogBoxDirEntry{info: entry,}) as Box<dyn dav_server::fs::DavDirEntry>);
                 }
             })
                 as dav_server::fs::FsStream<

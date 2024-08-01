@@ -2,8 +2,11 @@
 mod tests {
     use crate::file_system::DogBoxFileSystem;
     use dav_server::{fakels::FakeLs, DavHandler};
+    use hyper::{body, server::conn::http1, Request};
+    use hyper_util::rt::TokioIo;
     use reqwest_dav::{Auth, ClientBuilder, Depth};
-    use std::convert::Infallible;
+    use std::{convert::Infallible, net::SocketAddr};
+    use tokio::net::TcpListener;
 
     #[test_log::test(tokio::test)]
     async fn test_dav_access() {
@@ -14,20 +17,34 @@ mod tests {
             .locksystem(FakeLs::new())
             .build_handler();
 
-        let make_service = hyper::service::make_service_fn(move |_| {
-            let dav_server = dav_server.clone();
-            async move {
-                let func = move |req| {
-                    let dav_server = dav_server.clone();
-                    async move { Ok::<_, Infallible>(dav_server.handle(req).await) }
-                };
-                Ok::<_, Infallible>(hyper::service::service_fn(func))
-            }
-        });
+        let address = SocketAddr::from(([127, 0, 0, 1], 4918));
+        let listener = TcpListener::bind(address).await.unwrap();
+        println!("Serving on http://{}", address);
 
-        let address = ([127, 0, 0, 1], 4918).into();
+        let serve = || async {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let io = TokioIo::new(stream);
+                let dav_server = dav_server.clone();
+                tokio::task::spawn(async move {
+                    let make_service = move |req: Request<body::Incoming>| {
+                        let dav_server = dav_server.clone();
+                        async move { Ok::<_, Infallible>(dav_server.handle(req).await) }
+                    };
+
+                    // Finally, we bind the incoming connection to our `hello` service
+                    if let Err(err) = http1::Builder::new()
+                        // `service_fn` converts our function in a `Service`
+                        .serve_connection(io, hyper::service::service_fn(make_service))
+                        .await
+                    {
+                        eprintln!("Error serving connection: {:?}", err);
+                    }
+                });
+            }
+        };
+
         let server_url = format!("http://{}", address);
-        let bound = hyper::Server::bind(&address);
         let run_client = async {
             let client = ClientBuilder::new()
                 .set_host(server_url)
@@ -68,7 +85,7 @@ mod tests {
             }
         };
         tokio::select! {
-            result = bound.serve(make_service) => {
+            result = serve() => {
                 panic!("Server isn't expected to exit: {:?}", result);
             }
             _ = run_client => {
