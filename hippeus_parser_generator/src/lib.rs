@@ -16,10 +16,26 @@ pub enum Parser {
     Condition(RegisterId, Box<Parser>),
     Fail,
     Sequence(Vec<Parser>),
-    Not { from: RegisterId, to: RegisterId },
+    Not {
+        from: RegisterId,
+        to: RegisterId,
+    },
     Constant(RegisterId, RegisterValue),
     WriteOutputByte(RegisterId),
     WriteOutputSeparator,
+    Loop(RegisterId, Box<Parser>),
+    RequireDigit {
+        input: RegisterId,
+        output: RegisterId,
+    },
+    Add {
+        destination: RegisterId,
+        summand: RegisterId,
+    },
+    Multiply {
+        destination: RegisterId,
+        factor: RegisterId,
+    },
 }
 
 pub enum InterpreterStatus {
@@ -157,13 +173,100 @@ impl<'t> Interpreter<'t> {
                 }
             }
             Parser::WriteOutputSeparator => output.write_separator(),
+            Parser::Loop(condition, body) => {
+                let register_read_result = self.registers.get(condition);
+                match register_read_result {
+                    Some(register_value) => match register_value {
+                        RegisterValue::Boolean(true) => {
+                            // this is the loop magic:
+                            self.position.last_mut().unwrap().1 -= 1;
+
+                            self.position.push((std::slice::from_ref(&*body), 0));
+                        }
+                        RegisterValue::Boolean(false) => {}
+                        RegisterValue::Byte(_) => return Some(InterpreterStatus::ErrorInParser),
+                    },
+                    None => return Some(InterpreterStatus::ErrorInParser),
+                }
+            }
+            Parser::RequireDigit { input, output } => {
+                let register_read_result = self.registers.get(input);
+                let digit: u8 = match register_read_result {
+                    Some(register_value) => match register_value {
+                        RegisterValue::Boolean(_) => return Some(InterpreterStatus::ErrorInParser),
+                        RegisterValue::Byte(byte) => match byte {
+                            b'0' => 0,
+                            b'1' => 1,
+                            b'2' => 2,
+                            b'3' => 3,
+                            b'4' => 4,
+                            b'5' => 5,
+                            b'6' => 6,
+                            b'7' => 7,
+                            b'8' => 8,
+                            b'9' => 9,
+                            _ => return Some(InterpreterStatus::Failed),
+                        },
+                    },
+                    None => return Some(InterpreterStatus::ErrorInParser),
+                };
+                if !self.write_register(*output, &RegisterValue::Byte(digit)) {
+                    return Some(InterpreterStatus::ErrorInParser);
+                }
+            }
+            Parser::Add {
+                destination,
+                summand,
+            } => match self.calculate_binary_operation(*destination, *summand, u8::checked_add) {
+                Some(status) => return Some(status),
+                None => {}
+            },
+            Parser::Multiply {
+                destination,
+                factor,
+            } => match self.calculate_binary_operation(*destination, *factor, u8::checked_mul) {
+                Some(status) => return Some(status),
+                None => {}
+            },
         }
         None
     }
 
     fn write_register(&mut self, id: RegisterId, value: &RegisterValue) -> bool {
-        let result = self.registers.try_insert(id, *value);
-        result.is_ok()
+        self.registers.insert(id, *value);
+        true
+    }
+
+    fn calculate_binary_operation(
+        &mut self,
+        destination: RegisterId,
+        operand: RegisterId,
+        operation: fn(u8, u8) -> Option<u8>,
+    ) -> Option<InterpreterStatus> {
+        let first_operand: u8 = match self.registers.get(&destination) {
+            Some(register_value) => match register_value {
+                RegisterValue::Boolean(_) => return Some(InterpreterStatus::ErrorInParser),
+                RegisterValue::Byte(byte) => *byte,
+            },
+            None => return Some(InterpreterStatus::ErrorInParser),
+        };
+        let second_operand: u8 = match self.registers.get(&operand) {
+            Some(register_value) => match register_value {
+                RegisterValue::Boolean(_) => return Some(InterpreterStatus::ErrorInParser),
+                RegisterValue::Byte(byte) => *byte,
+            },
+            None => return Some(InterpreterStatus::ErrorInParser),
+        };
+        let result = operation(first_operand, second_operand);
+        match result {
+            Some(sum) => {
+                if !self.write_register(destination, &RegisterValue::Byte(sum)) {
+                    return Some(InterpreterStatus::ErrorInParser);
+                }
+            }
+            None => return Some(InterpreterStatus::Failed),
+        };
+        None
     }
 }
 
@@ -477,6 +580,61 @@ fn test_mixed_output() {
             {
                 let element = &output[3];
                 assert!(element.is_none());
+            }
+            assert!(!has_extraneous_input);
+        }
+        ParseResult::Failed => panic!(),
+        ParseResult::ErrorInParser => panic!(),
+    }
+}
+
+#[test]
+fn test_number_parsing() {
+    let accumulator = RegisterId(0);
+    let loop_condition = RegisterId(1);
+    let constant_10 = RegisterId(2);
+    let input_byte = RegisterId(3);
+    let input_digit = RegisterId(4);
+    let parser = Parser::Sequence(vec![
+        Parser::Constant(accumulator, RegisterValue::Byte(0)),
+        Parser::Constant(loop_condition, RegisterValue::Boolean(true)),
+        Parser::Constant(constant_10, RegisterValue::Byte(10)),
+        Parser::Loop(
+            loop_condition,
+            Box::new(Parser::Sequence(vec![
+                Parser::ReadInputByte(input_byte),
+                Parser::RequireDigit {
+                    input: input_byte,
+                    output: input_digit,
+                },
+                Parser::Multiply {
+                    destination: accumulator,
+                    factor: constant_10,
+                },
+                Parser::Add {
+                    destination: accumulator,
+                    summand: input_digit,
+                },
+                Parser::IsEndOfInput(loop_condition),
+                Parser::Not {
+                    from: loop_condition,
+                    to: loop_condition,
+                },
+            ])),
+        ),
+        Parser::WriteOutputByte(accumulator),
+    ]);
+    let result = parse(&parser, &mut Slice::new("123"));
+    match result {
+        ParseResult::Success {
+            output,
+            has_extraneous_input,
+        } => {
+            assert_eq!(1, output.len());
+            {
+                let element = &output[0];
+                let non_separator = element.as_ref().unwrap();
+                assert_eq!(&[123u8][..], &non_separator[..]);
             }
             assert!(!has_extraneous_input);
         }
