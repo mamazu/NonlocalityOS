@@ -12,6 +12,7 @@ pub enum RegisterValue {
 
 pub enum Parser {
     IsEndOfInput(RegisterId),
+    ReadInputByte(RegisterId),
     Condition(RegisterId, Box<Parser>),
     Fail,
     Sequence(Vec<Parser>),
@@ -101,6 +102,15 @@ impl<'t> Interpreter<'t> {
                     return Some(InterpreterStatus::ErrorInParser);
                 }
             }
+            Parser::ReadInputByte(destination) => match self.buffered_input {
+                Some(byte) => {
+                    if !self.write_register(*destination, &RegisterValue::Byte(byte)) {
+                        return Some(InterpreterStatus::ErrorInParser);
+                    }
+                    return Some(InterpreterStatus::WaitingForInput);
+                }
+                None => return Some(InterpreterStatus::Failed),
+            },
             Parser::Condition(cause, action) => {
                 let register_read_result = self.registers.get(cause);
                 match register_read_result {
@@ -299,6 +309,65 @@ fn test_fail() {
         Some(false),
         is_match(&parser, &mut Slice::new("aaaaaaaaaaaaaaaaaa"))
     );
+}
+
+#[test]
+fn test_extraneous_input() {
+    let parser = Parser::Sequence(vec![]);
+    let result = parse(&parser, &mut Slice::new("a"));
+    match result {
+        ParseResult::Success {
+            output,
+            has_extraneous_input,
+        } => {
+            assert_eq!(0, output.len());
+            assert!(has_extraneous_input);
+        }
+        ParseResult::Failed => panic!(),
+        ParseResult::ErrorInParser => panic!(),
+    }
+}
+
+#[test]
+fn test_read_input_success() {
+    let parser = Parser::Sequence(vec![
+        Parser::ReadInputByte(RegisterId(0)),
+        Parser::WriteOutputByte(RegisterId(0)),
+    ]);
+    let result = parse(&parser, &mut Slice::new("a"));
+    match result {
+        ParseResult::Success {
+            output,
+            has_extraneous_input,
+        } => {
+            assert_eq!(1, output.len());
+            {
+                let element = &output[0];
+                let non_separator = element.as_ref().unwrap();
+                assert_eq!(&[b'a'][..], &non_separator[..]);
+            }
+            assert!(!has_extraneous_input);
+        }
+        ParseResult::Failed => panic!(),
+        ParseResult::ErrorInParser => panic!(),
+    }
+}
+
+#[test]
+fn test_read_input_failure() {
+    let parser = Parser::Sequence(vec![
+        Parser::ReadInputByte(RegisterId(0)),
+        Parser::WriteOutputByte(RegisterId(0)),
+    ]);
+    let result = parse(&parser, &mut Slice::new(""));
+    match result {
+        ParseResult::Success {
+            output: _,
+            has_extraneous_input: _,
+        } => panic!(),
+        ParseResult::Failed => {}
+        ParseResult::ErrorInParser => panic!(),
+    }
 }
 
 #[test]
