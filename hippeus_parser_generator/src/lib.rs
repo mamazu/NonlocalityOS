@@ -66,45 +66,53 @@ impl<'t> Interpreter<'t> {
             let sequence_element =
                 &position_in_innermost_sequence.0[position_in_innermost_sequence.1];
             position_in_innermost_sequence.1 += 1;
-            match sequence_element {
-                Parser::IsEndOfInput(destination) => {
-                    if !self.write_register(
-                        *destination,
-                        RegisterValue::Boolean(self.buffered_input.is_none()),
-                    ) {
-                        return InterpreterStatus::ErrorInParser;
-                    }
+            match self.enter_parser(sequence_element) {
+                Some(status) => return status,
+                None => {}
+            }
+        }
+    }
+
+    fn enter_parser(&mut self, parser: &'t Parser) -> Option<InterpreterStatus> {
+        match parser {
+            Parser::IsEndOfInput(destination) => {
+                if !self.write_register(
+                    *destination,
+                    RegisterValue::Boolean(self.buffered_input.is_none()),
+                ) {
+                    return Some(InterpreterStatus::ErrorInParser);
                 }
-                Parser::Condition(cause, action) => {
-                    let register_read_result = self.registers.get(cause);
-                    match register_read_result {
-                        Some(register_value) => match register_value {
-                            RegisterValue::Boolean(true) => {
-                                self.position.push((std::slice::from_ref(&*action), 0));
-                            }
-                            RegisterValue::Boolean(false) => {}
-                        },
-                        None => return InterpreterStatus::ErrorInParser,
-                    }
+            }
+            Parser::Condition(cause, action) => {
+                let register_read_result = self.registers.get(cause);
+                match register_read_result {
+                    Some(register_value) => match register_value {
+                        RegisterValue::Boolean(true) => {
+                            self.position.push((std::slice::from_ref(&*action), 0));
+                        }
+                        RegisterValue::Boolean(false) => {}
+                    },
+                    None => return Some(InterpreterStatus::ErrorInParser),
                 }
-                Parser::Fail => return InterpreterStatus::Failed,
-                Parser::Sequence(inner_sequence) => {
-                    self.position.push((&inner_sequence[..], 0));
-                }
-                Parser::Not { from, to } => {
-                    let register_read_result = self.registers.get(from);
-                    let result_of_not_operation = match register_read_result {
-                        Some(register_value) => match register_value {
-                            RegisterValue::Boolean(boolean) => !boolean,
-                        },
-                        None => return InterpreterStatus::ErrorInParser,
-                    };
-                    if !self.write_register(*to, RegisterValue::Boolean(result_of_not_operation)) {
-                        return InterpreterStatus::ErrorInParser;
-                    }
+            }
+            Parser::Fail => return Some(InterpreterStatus::Failed),
+            Parser::Sequence(inner_sequence) => {
+                self.position.push((&inner_sequence[..], 0));
+            }
+            Parser::Not { from, to } => {
+                let register_read_result = self.registers.get(from);
+                let result_of_not_operation = match register_read_result {
+                    Some(register_value) => match register_value {
+                        RegisterValue::Boolean(boolean) => !boolean,
+                    },
+                    None => return Some(InterpreterStatus::ErrorInParser),
+                };
+                if !self.write_register(*to, RegisterValue::Boolean(result_of_not_operation)) {
+                    return Some(InterpreterStatus::ErrorInParser);
                 }
             }
         }
+        None
     }
 
     fn write_register(&mut self, id: RegisterId, value: RegisterValue) -> bool {
