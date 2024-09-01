@@ -110,19 +110,13 @@ impl<'t> Interpreter<'t> {
         output: &mut dyn WriteOutput,
     ) -> Option<InterpreterStatus> {
         match parser {
-            Parser::IsEndOfInput(destination) => {
-                if !self.write_register(
-                    *destination,
-                    &RegisterValue::Boolean(self.buffered_input.is_none()),
-                ) {
-                    return Some(InterpreterStatus::ErrorInParser);
-                }
-            }
+            Parser::IsEndOfInput(destination) => self.write_register(
+                *destination,
+                &RegisterValue::Boolean(self.buffered_input.is_none()),
+            ),
             Parser::ReadInputByte(destination) => match self.buffered_input {
                 Some(byte) => {
-                    if !self.write_register(*destination, &RegisterValue::Byte(byte)) {
-                        return Some(InterpreterStatus::ErrorInParser);
-                    }
+                    self.write_register(*destination, &RegisterValue::Byte(byte));
                     return Some(InterpreterStatus::WaitingForInput);
                 }
                 None => return Some(InterpreterStatus::Failed),
@@ -153,14 +147,10 @@ impl<'t> Interpreter<'t> {
                     },
                     None => return Some(InterpreterStatus::ErrorInParser),
                 };
-                if !self.write_register(*to, &RegisterValue::Boolean(result_of_not_operation)) {
-                    return Some(InterpreterStatus::ErrorInParser);
-                }
+                self.write_register(*to, &RegisterValue::Boolean(result_of_not_operation));
             }
             Parser::Constant(destination, value) => {
-                if !self.write_register(*destination, value) {
-                    return Some(InterpreterStatus::ErrorInParser);
-                }
+                self.write_register(*destination, value);
             }
             Parser::WriteOutputByte(from) => {
                 let register_read_result = self.registers.get(from);
@@ -210,9 +200,7 @@ impl<'t> Interpreter<'t> {
                     },
                     None => return Some(InterpreterStatus::ErrorInParser),
                 };
-                if !self.write_register(*output, &RegisterValue::Byte(digit)) {
-                    return Some(InterpreterStatus::ErrorInParser);
-                }
+                self.write_register(*output, &RegisterValue::Byte(digit));
             }
             Parser::Add {
                 destination,
@@ -232,9 +220,8 @@ impl<'t> Interpreter<'t> {
         None
     }
 
-    fn write_register(&mut self, id: RegisterId, value: &RegisterValue) -> bool {
+    fn write_register(&mut self, id: RegisterId, value: &RegisterValue) {
         self.registers.insert(id, *value);
-        true
     }
 
     fn calculate_binary_operation(
@@ -260,9 +247,7 @@ impl<'t> Interpreter<'t> {
         let result = operation(first_operand, second_operand);
         match result {
             Some(sum) => {
-                if !self.write_register(destination, &RegisterValue::Byte(sum)) {
-                    return Some(InterpreterStatus::ErrorInParser);
-                }
+                self.write_register(destination, &RegisterValue::Byte(sum));
             }
             None => return Some(InterpreterStatus::Failed),
         };
