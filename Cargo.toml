@@ -5,6 +5,7 @@ members=[
     "management_service",
     "nonlocality_env",
     "nonlocality_build_utils",
+    "hippeus_parser_generator",
     "dogbox/dogbox_blob_layer",
     "dogbox/dogbox_tree",
     "dogbox/dogbox_tree_editor",
