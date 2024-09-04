@@ -1,19 +1,19 @@
 # Setup
 
 * install Rust: https://www.rust-lang.org/learn/get-started (tested with Rust 1.80.0)
-* restart your terminal because *worse is better* or something
+* restart your terminal
 
-## Windows
+## Windows (not supported at the moment)
 
 * install Visual Studio with C++ or whatever
 
 ## Linux Mint / Ubuntu / Debian
 
-* `sudo apt install build-essential libssl-dev`
+* `sudo apt install build-essential libssl-dev podman`
 
 # Test
 
-* run `test.bat` or `./test.sh`
+* run `./test.sh`
 * on success it will print `Success!` in the end
 
 # Formatting code
@@ -22,7 +22,7 @@
 
 * run `./test.sh` or `./build.sh`
 
-## Windows
+## Windows (not supported at the moment)
 
 * run `test.bat` or `build.bat`
 
