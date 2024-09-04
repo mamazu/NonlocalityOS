@@ -173,6 +173,19 @@ fn parse_command(input: &str) -> Option<CargoBuildMode> {
     }
 }
 
+async fn install_nextest(
+    working_directory: &std::path::Path,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
+) -> NumberOfErrors {
+    run_cargo(
+        &working_directory,
+        &["install", "cargo-nextest", "--locked"],
+        &HashMap::new(),
+        progress_reporter,
+    )
+    .await
+}
+
 async fn build(
     mode: CargoBuildMode,
     repository: &std::path::Path,
@@ -205,6 +218,7 @@ async fn build(
             .await;
         }
         CargoBuildMode::Test | CargoBuildMode::Coverage => {
+            error_count += install_nextest(&repository, &progress_reporter).await;
             error_count += run_cargo_test(
                 &repository,
                 &coverage_info_directory,

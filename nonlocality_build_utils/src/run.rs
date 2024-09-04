@@ -128,7 +128,7 @@ pub async fn run_cargo_test(
     };
     run_cargo(
         &project,
-        &["test", "--verbose"],
+        &["nextest", "run"],
         &environment_variables,
         progress_reporter,
     )

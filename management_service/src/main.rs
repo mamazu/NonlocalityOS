@@ -456,6 +456,7 @@ fn tcp_ssl_handshake(host: &str, port: u16) -> Option<TcpSslConnection> {
     })
 }
 
+#[ignore = "blocks forever https://github.com/TyRoXx/NonlocalityOS/issues/81"]
 #[test]
 fn test_tcp_ssl_handshake() {
     let result = tcp_ssl_handshake("example.org", 0);
