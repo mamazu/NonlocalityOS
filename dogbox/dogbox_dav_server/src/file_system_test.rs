@@ -38,6 +38,7 @@ mod tests {
             match client.get("/test.txt").await.unwrap_err() {
                 reqwest_dav::Error::Reqwest(_) => panic!(),
                 reqwest_dav::Error::ReqwestDecode(_) => panic!(),
+                reqwest_dav::Error::MissingAuthContext => panic!(),
                 reqwest_dav::Error::Decode(decode) => match decode {
                     reqwest_dav::DecodeError::DigestAuth(_) => panic!(),
                     reqwest_dav::DecodeError::NoAuthHeaderInResponse => panic!(),
