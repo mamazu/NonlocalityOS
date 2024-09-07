@@ -1,0 +1,13 @@
+[package]
+name = "totp_example"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+totp-rs = {version = "5", features = ["qr", "gen_secret", "zeroize"]}
+tokio = {version = "1", features = ["rt-multi-thread", "macros", "time"]}
+tracing = "0"
+tracing-subscriber = "0"
+qrcode = "0"
