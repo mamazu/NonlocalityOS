@@ -240,6 +240,7 @@ async fn build(
         entries: BTreeMap::from([
             ("admin_tool".to_string(), Program::host()),
             ("astra".to_string(), Program::other()),
+            ("hippeus_parser_generator".to_string(), Program::other()),
             ("management_interface".to_string(), Program::other()),
             (
                 MANAGEMENT_SERVICE_NAME.to_string(),
@@ -250,6 +251,13 @@ async fn build(
             ),
             ("nonlocality_build_utils".to_string(), Program::other()),
             ("nonlocality_env".to_string(), Program::other()),
+            (
+                "nonlocality_host".to_string(),
+                match maybe_raspberry_pi.clone() {
+                    Some(raspberry_pi) => Program::host_and_pi(raspberry_pi),
+                    None => Program::host(),
+                },
+            ),
             ("dogbox/dogbox_blob_layer".to_string(), Program::other()),
             (
                 "dogbox/dogbox_dav_server".to_string(),
