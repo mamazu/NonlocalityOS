@@ -1,3 +1,4 @@
+use dogbox_blob_layer::BlobDigest;
 use futures::StreamExt;
 use ratatui::{
     crossterm::{
@@ -12,9 +13,16 @@ use std::{collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
 struct TypeId(u64);
 
 #[derive(Clone, PartialEq, Debug)]
+struct Reference {
+    type_id: TypeId,
+    digest: BlobDigest,
+}
+
+#[derive(Clone, PartialEq, Debug)]
 struct Value {
     type_id: TypeId,
     serialized: Vec<u8>,
+    references: Vec<Reference>,
 }
 
 impl Value {
@@ -22,6 +30,7 @@ impl Value {
         Value {
             type_id: TypeId(0),
             serialized: value.as_bytes().to_vec(),
+            references: Vec::new(),
         }
     }
 
@@ -29,6 +38,7 @@ impl Value {
         Value {
             type_id: TypeId(1),
             serialized: Vec::new(),
+            references: Vec::new(),
         }
     }
 
@@ -48,7 +58,7 @@ struct ServiceId(u64);
 
 #[derive(Clone)]
 enum Expression {
-    Atom(Value),
+    Literal(Value),
     Call {
         service: ServiceId,
         argument: Arc<Expression>,
@@ -126,7 +136,7 @@ async fn test_evaluate_call_expression() {
     let expected_result = Value::from_unit();
     let result = evaluate_call_expression(
         &ServiceId(0),
-        &Arc::new(Expression::Atom(Value::from_string("hello, world!\n"))),
+        &Arc::new(Expression::Literal(Value::from_string("hello, world!\n"))),
         &expected_result.type_id,
         &services,
     )
@@ -140,7 +150,7 @@ async fn evaluate_expression(
     service_resolver: &dyn ResolveServiceId,
 ) -> EvaluationResult {
     match evaluating {
-        Expression::Atom(value) => EvaluationResult::Success(value.clone()),
+        Expression::Literal(value) => EvaluationResult::Success(value.clone()),
         Expression::Call {
             service,
             argument,

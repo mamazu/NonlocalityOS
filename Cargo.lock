@@ -2077,6 +2077,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "crossterm",
+ "dogbox_blob_layer",
  "futures",
  "futures-core",
  "futures-util",
