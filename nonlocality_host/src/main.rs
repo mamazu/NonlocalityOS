@@ -1,3 +1,4 @@
+#![feature(array_chunks)]
 use dogbox_blob_layer::BlobDigest;
 use futures::StreamExt;
 use ratatui::{
@@ -7,12 +8,13 @@ use ratatui::{
     },
     widgets::Paragraph,
 };
+use sha3::{Digest, Sha3_512};
 use std::{collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug)]
 struct TypeId(u64);
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug)]
 struct Reference {
     type_id: TypeId,
     digest: BlobDigest,
@@ -53,63 +55,45 @@ impl Value {
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Ord, Eq)]
-struct ServiceId(u64);
-
-#[derive(Clone)]
-enum Expression {
-    Literal(Value),
-    Call {
-        service: ServiceId,
-        argument: Arc<Expression>,
-        result_type_id: TypeId,
-    },
-}
-
 trait ReduceExpression: Sync + Send {
-    fn reduce(&self, argument: Value) -> Pin<Box<dyn std::future::Future<Output = Value>>>;
+    fn reduce(
+        &self,
+        argument: Value,
+        loader: &dyn LoadValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value>>>;
 }
 
 #[derive(Clone, PartialEq, Debug)]
-enum EvaluationResult {
-    Success(Value),
-    TypeError,
-    IoError,
+enum ReductionError {
+    Type,
+    Io,
 }
 
 trait ResolveServiceId {
-    fn resolve(&self, service_id: &ServiceId) -> Option<Arc<dyn ReduceExpression>>;
+    fn resolve(&self, service_id: &TypeId) -> Option<Arc<dyn ReduceExpression>>;
 }
 
-async fn evaluate_call_expression(
-    service_id: &ServiceId,
-    argument: &Arc<Expression>,
-    result_type_id: &TypeId,
+type ReductionResult = std::result::Result<Value, ReductionError>;
+
+async fn reduce_expression(
+    argument: Value,
     service_resolver: &dyn ResolveServiceId,
-) -> EvaluationResult {
-    let recursion = Box::pin(evaluate_expression(argument.as_ref(), service_resolver));
-    let argument_evaluated = match recursion.await {
-        EvaluationResult::Success(success) => success,
-        EvaluationResult::TypeError => return EvaluationResult::TypeError,
-        EvaluationResult::IoError => return EvaluationResult::IoError,
-    };
-    let service = match service_resolver.resolve(service_id) {
+    loader: &dyn LoadValue,
+) -> ReductionResult {
+    let service = match service_resolver.resolve(&argument.type_id) {
         Some(service) => service,
-        None => return EvaluationResult::TypeError,
+        None => return Err(ReductionError::Type),
     };
-    let result = service.reduce(argument_evaluated).await;
-    if result.type_id != *result_type_id {
-        return EvaluationResult::TypeError;
-    }
-    EvaluationResult::Success(result)
+    let result = service.reduce(argument, loader).await;
+    Ok(result)
 }
 
 struct ServiceRegistry {
-    services: BTreeMap<ServiceId, Arc<dyn ReduceExpression>>,
+    services: BTreeMap<TypeId, Arc<dyn ReduceExpression>>,
 }
 
 impl ResolveServiceId for ServiceRegistry {
-    fn resolve(&self, service_id: &ServiceId) -> Option<Arc<dyn ReduceExpression>> {
+    fn resolve(&self, service_id: &TypeId) -> Option<Arc<dyn ReduceExpression>> {
         self.services.get(service_id).cloned()
     }
 }
@@ -119,44 +103,149 @@ struct TestConsole {
 }
 
 impl ReduceExpression for TestConsole {
-    fn reduce(&self, argument: Value) -> Pin<Box<dyn std::future::Future<Output = Value>>> {
-        let message = argument.to_string().unwrap();
-        self.writer.send(message).unwrap();
-        Box::pin(std::future::ready(Value::from_unit()))
+    fn reduce(
+        &self,
+        mut argument: Value,
+        loader: &dyn LoadValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value>>> {
+        let mut arguments = argument.references.drain(0..2);
+        let past_ref = arguments.next().unwrap();
+        let message_ref = arguments.next().unwrap();
+        assert!(arguments.next().is_none());
+        let message = loader.load_value(&message_ref).unwrap();
+        let message_string = message.to_string().unwrap();
+        self.writer.send(message_string).unwrap();
+        Box::pin(std::future::ready(make_effect(past_ref)))
+    }
+}
+
+struct Identity {}
+
+impl ReduceExpression for Identity {
+    fn reduce(
+        &self,
+        argument: Value,
+        _loader: &dyn LoadValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value>>> {
+        Box::pin(std::future::ready(argument))
+    }
+}
+
+fn calculate_reference(referenced: &Value) -> Reference {
+    let mut hasher = Sha3_512::new();
+    hasher.update(&referenced.type_id.0.to_be_bytes());
+    hasher.update(&referenced.serialized);
+    for item in &referenced.references {
+        hasher.update(&item.type_id.0.to_be_bytes());
+        hasher.update(&item.digest.0 .0);
+        hasher.update(&item.digest.0 .1);
+    }
+    let result = hasher.finalize();
+    let slice: &[u8] = result.as_slice();
+    let mut chunks: std::slice::ArrayChunks<u8, 64> = slice.array_chunks();
+    let chunk = chunks.next().unwrap();
+    assert!(chunks.remainder().is_empty());
+    Reference {
+        type_id: referenced.type_id.clone(),
+        digest: BlobDigest::new(chunk),
+    }
+}
+
+trait StoreValue {
+    fn store_value(&mut self, value: Arc<Value>) -> Reference;
+}
+
+trait LoadValue {
+    fn load_value(&self, reference: &Reference) -> Option<Arc<Value>>;
+}
+
+struct InMemoryValueStorage {
+    reference_to_value: BTreeMap<Reference, Arc<Value>>,
+}
+
+impl StoreValue for InMemoryValueStorage {
+    fn store_value(&mut self, value: Arc<Value>) -> Reference {
+        let reference = calculate_reference(&*value);
+        if !self.reference_to_value.contains_key(&reference) {
+            self.reference_to_value.insert(reference.clone(), value);
+        }
+        reference
+    }
+}
+
+impl LoadValue for InMemoryValueStorage {
+    fn load_value(&self, reference: &Reference) -> Option<Arc<Value>> {
+        self.reference_to_value.get(reference).cloned()
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_evaluate_call_expression() {
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let test_console: Arc<dyn ReduceExpression> = Arc::new(TestConsole { writer: sender });
+async fn test_reduce_expression() {
+    let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
     let services = ServiceRegistry {
-        services: BTreeMap::from([(ServiceId(0), test_console)]),
+        services: BTreeMap::from([(TypeId(0), identity.clone()), (TypeId(1), identity)]),
     };
-    let expected_result = Value::from_unit();
-    let result = evaluate_call_expression(
-        &ServiceId(0),
-        &Arc::new(Expression::Literal(Value::from_string("hello, world!\n"))),
-        &expected_result.type_id,
+    let value_storage = InMemoryValueStorage {
+        reference_to_value: BTreeMap::new(),
+    };
+    let result = reduce_expression(
+        Value::from_string("hello, world!\n"),
         &services,
+        &value_storage,
     )
-    .await;
-    assert_eq!(EvaluationResult::Success(expected_result), result);
-    assert_eq!(Some("hello, world!\n".to_string()), receiver.recv().await);
+    .await
+    .unwrap();
+    assert_eq!(Some("hello, world!\n".to_string()), result.to_string());
 }
 
-async fn evaluate_expression(
-    evaluating: &Expression,
-    service_resolver: &dyn ResolveServiceId,
-) -> EvaluationResult {
-    match evaluating {
-        Expression::Literal(value) => EvaluationResult::Success(value.clone()),
-        Expression::Call {
-            service,
-            argument,
-            result_type_id,
-        } => evaluate_call_expression(service, argument, result_type_id, service_resolver).await,
+fn make_text_in_console(past: Reference, text: Reference) -> Value {
+    Value {
+        type_id: TypeId(2),
+        serialized: Vec::new(),
+        references: vec![past, text],
     }
+}
+
+fn make_beginning_of_time() -> Value {
+    Value {
+        type_id: TypeId(3),
+        serialized: Vec::new(),
+        references: vec![],
+    }
+}
+
+fn make_effect(cause: Reference) -> Value {
+    Value {
+        type_id: TypeId(3),
+        serialized: Vec::new(),
+        references: vec![cause],
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_io() {
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let test_console: Arc<dyn ReduceExpression> = Arc::new(TestConsole { writer: sender });
+    let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
+    let services = ServiceRegistry {
+        services: BTreeMap::from([
+            (TypeId(0), identity.clone()),
+            (TypeId(1), identity),
+            (TypeId(2), test_console),
+        ]),
+    };
+
+    let mut value_storage = InMemoryValueStorage {
+        reference_to_value: BTreeMap::new(),
+    };
+    let past = value_storage.store_value(Arc::new(make_beginning_of_time()));
+    let message = value_storage.store_value(Arc::new(Value::from_string("hello, world!\n")));
+    let text_in_console = make_text_in_console(past.clone(), message);
+    let result = reduce_expression(text_in_console, &services, &value_storage)
+        .await
+        .unwrap();
+    assert_eq!(make_effect(past), result);
+    assert_eq!(Some("hello, world!\n".to_string()), receiver.recv().await);
 }
 
 #[tokio::main(flavor = "multi_thread")]

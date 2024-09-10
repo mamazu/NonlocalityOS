@@ -2082,6 +2082,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "ratatui",
+ "sha3",
  "tokio",
  "tokio-stream",
 ]
