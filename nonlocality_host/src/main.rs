@@ -1,15 +1,14 @@
 #![feature(array_chunks)]
 use dogbox_blob_layer::BlobDigest;
-use futures::StreamExt;
-use ratatui::{
-    crossterm::{
-        self,
-        event::{Event, KeyCode},
-    },
-    widgets::Paragraph,
-};
+use futures::future::join;
 use sha3::{Digest, Sha3_512};
-use std::{collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug)]
 struct TypeId(u64);
@@ -56,36 +55,93 @@ impl Value {
 }
 
 trait ReduceExpression: Sync + Send {
-    fn reduce(
-        &self,
+    fn reduce<'t>(
+        &'t self,
         argument: Value,
-        loader: &dyn LoadValue,
-    ) -> Pin<Box<dyn std::future::Future<Output = Value>>>;
+        service_resolver: &'t dyn ResolveServiceId,
+        loader: &'t dyn LoadValue,
+        storage: &'t dyn StoreValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value> + 't>>;
 }
 
 #[derive(Clone, PartialEq, Debug)]
 enum ReductionError {
-    Type,
+    NoServiceForType(TypeId),
     Io,
+    UnknownReference(Reference),
 }
 
 trait ResolveServiceId {
     fn resolve(&self, service_id: &TypeId) -> Option<Arc<dyn ReduceExpression>>;
 }
 
-type ReductionResult = std::result::Result<Value, ReductionError>;
+async fn reduce_expression_without_storing_the_final_result(
+    argument: Value,
+    service_resolver: &dyn ResolveServiceId,
+    loader: &dyn LoadValue,
+    storage: &dyn StoreValue,
+) -> std::result::Result<Value, ReductionError> {
+    let service = match service_resolver.resolve(&argument.type_id) {
+        Some(service) => service,
+        None => return Err(ReductionError::NoServiceForType(argument.type_id)),
+    };
+    let result = service
+        .reduce(argument, service_resolver, loader, storage)
+        .await;
+    Ok(result)
+}
 
 async fn reduce_expression(
     argument: Value,
     service_resolver: &dyn ResolveServiceId,
     loader: &dyn LoadValue,
-) -> ReductionResult {
-    let service = match service_resolver.resolve(&argument.type_id) {
-        Some(service) => service,
-        None => return Err(ReductionError::Type),
+    storage: &dyn StoreValue,
+) -> std::result::Result<Reference, ReductionError> {
+    let value = reduce_expression_without_storing_the_final_result(
+        argument,
+        service_resolver,
+        loader,
+        storage,
+    )
+    .await?;
+    Ok(storage.store_value(Arc::new(value)))
+}
+
+struct ReferencedValue {
+    reference: Reference,
+    value: Arc<Value>,
+}
+
+impl ReferencedValue {
+    fn new(reference: Reference, value: Arc<Value>) -> ReferencedValue {
+        ReferencedValue {
+            reference: reference,
+            value: value,
+        }
+    }
+}
+
+async fn reduce_expression_from_reference(
+    argument: &Reference,
+    service_resolver: &dyn ResolveServiceId,
+    loader: &dyn LoadValue,
+    storage: &dyn StoreValue,
+) -> std::result::Result<ReferencedValue, ReductionError> {
+    let argument_value = match loader.load_value(argument) {
+        Some(loaded) => loaded,
+        None => return Err(ReductionError::UnknownReference(argument.clone())),
     };
-    let result = service.reduce(argument, loader).await;
-    Ok(result)
+    let value = reduce_expression_without_storing_the_final_result(
+        /*TODO: avoid this clone*/ (*argument_value).clone(),
+        service_resolver,
+        loader,
+        storage,
+    )
+    .await?;
+    Ok(ReferencedValue::new(
+        storage.store_value(Arc::new(value)),
+        argument_value,
+    ))
 }
 
 struct ServiceRegistry {
@@ -103,19 +159,33 @@ struct TestConsole {
 }
 
 impl ReduceExpression for TestConsole {
-    fn reduce(
-        &self,
-        mut argument: Value,
-        loader: &dyn LoadValue,
-    ) -> Pin<Box<dyn std::future::Future<Output = Value>>> {
-        let mut arguments = argument.references.drain(0..2);
-        let past_ref = arguments.next().unwrap();
-        let message_ref = arguments.next().unwrap();
-        assert!(arguments.next().is_none());
-        let message = loader.load_value(&message_ref).unwrap();
-        let message_string = message.to_string().unwrap();
-        self.writer.send(message_string).unwrap();
-        Box::pin(std::future::ready(make_effect(past_ref)))
+    fn reduce<'t>(
+        &'t self,
+        argument: Value,
+        service_resolver: &'t dyn ResolveServiceId,
+        loader: &'t dyn LoadValue,
+        storage: &'t dyn StoreValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value> + 't>> {
+        Box::pin(async move {
+            assert_eq!(2, argument.references.len());
+            let past_ref = reduce_expression_from_reference(
+                &argument.references[0],
+                service_resolver,
+                loader,
+                storage,
+            );
+            let message_ref = reduce_expression_from_reference(
+                &argument.references[1],
+                service_resolver,
+                loader,
+                storage,
+            );
+            let (past_result, message_result) = join(past_ref, message_ref).await;
+            let past = past_result.unwrap();
+            let message_string = message_result.unwrap().value.to_string().unwrap();
+            self.writer.send(message_string).unwrap();
+            make_effect(past.reference)
+        })
     }
 }
 
@@ -125,7 +195,9 @@ impl ReduceExpression for Identity {
     fn reduce(
         &self,
         argument: Value,
+        service_resolver: &dyn ResolveServiceId,
         _loader: &dyn LoadValue,
+        storage: &dyn StoreValue,
     ) -> Pin<Box<dyn std::future::Future<Output = Value>>> {
         Box::pin(std::future::ready(argument))
     }
@@ -152,7 +224,7 @@ fn calculate_reference(referenced: &Value) -> Reference {
 }
 
 trait StoreValue {
-    fn store_value(&mut self, value: Arc<Value>) -> Reference;
+    fn store_value(&self, value: Arc<Value>) -> Reference;
 }
 
 trait LoadValue {
@@ -160,14 +232,15 @@ trait LoadValue {
 }
 
 struct InMemoryValueStorage {
-    reference_to_value: BTreeMap<Reference, Arc<Value>>,
+    reference_to_value: Mutex<BTreeMap<Reference, Arc<Value>>>,
 }
 
 impl StoreValue for InMemoryValueStorage {
-    fn store_value(&mut self, value: Arc<Value>) -> Reference {
+    fn store_value(&self, value: Arc<Value>) -> Reference {
+        let mut lock = self.reference_to_value.lock().unwrap();
         let reference = calculate_reference(&*value);
-        if !self.reference_to_value.contains_key(&reference) {
-            self.reference_to_value.insert(reference.clone(), value);
+        if !lock.contains_key(&reference) {
+            lock.insert(reference.clone(), value);
         }
         reference
     }
@@ -175,7 +248,8 @@ impl StoreValue for InMemoryValueStorage {
 
 impl LoadValue for InMemoryValueStorage {
     fn load_value(&self, reference: &Reference) -> Option<Arc<Value>> {
-        self.reference_to_value.get(reference).cloned()
+        let lock = self.reference_to_value.lock().unwrap();
+        lock.get(reference).cloned()
     }
 }
 
@@ -186,11 +260,12 @@ async fn test_reduce_expression() {
         services: BTreeMap::from([(TypeId(0), identity.clone()), (TypeId(1), identity)]),
     };
     let value_storage = InMemoryValueStorage {
-        reference_to_value: BTreeMap::new(),
+        reference_to_value: Mutex::new(BTreeMap::new()),
     };
-    let result = reduce_expression(
+    let result = reduce_expression_without_storing_the_final_result(
         Value::from_string("hello, world!\n"),
         &services,
+        &value_storage,
         &value_storage,
     )
     .await
@@ -223,54 +298,201 @@ fn make_effect(cause: Reference) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_io() {
+async fn test_effect() {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let test_console: Arc<dyn ReduceExpression> = Arc::new(TestConsole { writer: sender });
     let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
     let services = ServiceRegistry {
         services: BTreeMap::from([
             (TypeId(0), identity.clone()),
-            (TypeId(1), identity),
+            (TypeId(1), identity.clone()),
             (TypeId(2), test_console),
+            (TypeId(3), identity),
         ]),
     };
 
-    let mut value_storage = InMemoryValueStorage {
-        reference_to_value: BTreeMap::new(),
+    let value_storage = InMemoryValueStorage {
+        reference_to_value: Mutex::new(BTreeMap::new()),
     };
     let past = value_storage.store_value(Arc::new(make_beginning_of_time()));
     let message = value_storage.store_value(Arc::new(Value::from_string("hello, world!\n")));
     let text_in_console = make_text_in_console(past.clone(), message);
-    let result = reduce_expression(text_in_console, &services, &value_storage)
-        .await
-        .unwrap();
+    let result = reduce_expression_without_storing_the_final_result(
+        text_in_console,
+        &services,
+        &value_storage,
+        &value_storage,
+    )
+    .await
+    .unwrap();
     assert_eq!(make_effect(past), result);
     assert_eq!(Some("hello, world!\n".to_string()), receiver.recv().await);
 }
 
+fn make_seconds(amount: u64) -> Value {
+    Value {
+        type_id: TypeId(5),
+        serialized: amount.to_be_bytes().to_vec(),
+        references: Vec::new(),
+    }
+}
+
+fn to_seconds(value: &Value) -> Option<u64> {
+    if value.type_id != TypeId(5) {
+        return None;
+    }
+    let mut buf: [u8; 8] = [0; 8];
+    if buf.len() != value.serialized.len() {
+        return None;
+    }
+    buf.copy_from_slice(&value.serialized);
+    Some(u64::from_be_bytes(buf))
+}
+
+fn make_delay(before: Reference, duration: Reference) -> Value {
+    Value {
+        type_id: TypeId(4),
+        serialized: Vec::new(),
+        references: vec![before, duration],
+    }
+}
+
+struct DelayService {}
+
+impl ReduceExpression for DelayService {
+    fn reduce<'t>(
+        &'t self,
+        mut argument: Value,
+        service_resolver: &'t dyn ResolveServiceId,
+        loader: &'t dyn LoadValue,
+        storage: &'t dyn StoreValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value> + 't>> {
+        let mut arguments = argument.references.drain(0..2);
+        let before_ref = arguments.next().unwrap();
+        let duration_ref = arguments.next().unwrap();
+        assert!(arguments.next().is_none());
+        Box::pin(async move {
+            let before_future =
+                reduce_expression_from_reference(&before_ref, service_resolver, loader, storage);
+            let duration_future =
+                reduce_expression_from_reference(&duration_ref, service_resolver, loader, storage);
+            let (before_result, duration_result) = join(before_future, duration_future).await;
+            let duration = duration_result.unwrap().value;
+            let seconds = to_seconds(&duration).unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+            make_effect(before_result.unwrap().reference)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_delay() {
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let test_console: Arc<dyn ReduceExpression> = Arc::new(TestConsole { writer: sender });
+    let delay_service: Arc<dyn ReduceExpression> = Arc::new(DelayService {});
+    let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
+    let services = ServiceRegistry {
+        services: BTreeMap::from([
+            (TypeId(0), identity.clone()),
+            (TypeId(1), identity.clone()),
+            (TypeId(2), test_console),
+            (TypeId(3), identity.clone()),
+            (TypeId(4), delay_service),
+            (TypeId(5), identity),
+        ]),
+    };
+
+    let value_storage = InMemoryValueStorage {
+        reference_to_value: Mutex::new(BTreeMap::new()),
+    };
+    let past = value_storage.store_value(Arc::new(make_beginning_of_time()));
+    let duration =
+        value_storage.store_value(Arc::new(make_seconds(/*can't waste time here*/ 0)));
+    let delay = value_storage.store_value(Arc::new(make_delay(past.clone(), duration)));
+    let message = value_storage.store_value(Arc::new(Value::from_string("hello, world!\n")));
+    let text_in_console = make_text_in_console(delay, message);
+    let result = reduce_expression_without_storing_the_final_result(
+        text_in_console,
+        &services,
+        &value_storage,
+        &value_storage,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        make_effect(value_storage.store_value(Arc::new(make_effect(past)))),
+        result
+    );
+    assert_eq!(Some("hello, world!\n".to_string()), receiver.recv().await);
+}
+
+struct ActualConsole {}
+
+impl ReduceExpression for ActualConsole {
+    fn reduce<'t>(
+        &'t self,
+        argument: Value,
+        service_resolver: &'t dyn ResolveServiceId,
+        loader: &'t dyn LoadValue,
+        storage: &'t dyn StoreValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value> + 't>> {
+        Box::pin(async move {
+            assert_eq!(2, argument.references.len());
+            let past_ref = reduce_expression_from_reference(
+                &argument.references[0],
+                service_resolver,
+                loader,
+                storage,
+            );
+            let message_ref = reduce_expression_from_reference(
+                &argument.references[1],
+                service_resolver,
+                loader,
+                storage,
+            );
+            let (past_result, message_result) = join(past_ref, message_ref).await;
+            let past = past_result.unwrap();
+            let message_string = message_result.unwrap().value.to_string().unwrap();
+            print!("{}", &message_string);
+            io::stdout().flush().unwrap();
+            make_effect(past.reference)
+        })
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::io::Result<()> {
-    let mut terminal = ratatui::init();
-    let period = Duration::from_secs_f32(0.2);
-    let mut interval = tokio::time::interval(period);
-    let mut events = crossterm::event::EventStream::new();
-    let mut is_quitting = false;
-    while !is_quitting {
-        tokio::select! {
-            _ = interval.tick() => {
-                terminal.draw(|frame| {
-                    let greeting = Paragraph::new("Hello World! (press 'q' to quit)");
-                    frame.render_widget(greeting, frame.area());}
-                )?;
-                },
-            Some(Ok(event)) = events.next() => {
-                if let Event::Key(key) = event {
-                    if KeyCode::Char('q') == key.code {
-                        is_quitting=true;
-                    }
-                }
-            },
-        }
-    }
-    ratatui::try_restore()
+    let test_console: Arc<dyn ReduceExpression> = Arc::new(ActualConsole {});
+    let delay_service: Arc<dyn ReduceExpression> = Arc::new(DelayService {});
+    let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
+    let services = ServiceRegistry {
+        services: BTreeMap::from([
+            (TypeId(0), identity.clone()),
+            (TypeId(1), identity.clone()),
+            (TypeId(2), test_console),
+            (TypeId(3), identity.clone()),
+            (TypeId(4), delay_service),
+            (TypeId(5), identity),
+        ]),
+    };
+    let value_storage = InMemoryValueStorage {
+        reference_to_value: Mutex::new(BTreeMap::new()),
+    };
+    let past = value_storage.store_value(Arc::new(make_beginning_of_time()));
+    let message_1 = value_storage.store_value(Arc::new(Value::from_string("hello, ")));
+    let text_in_console_1 =
+        value_storage.store_value(Arc::new(make_text_in_console(past, message_1)));
+    let duration = value_storage.store_value(Arc::new(make_seconds(3)));
+    let delay = value_storage.store_value(Arc::new(make_delay(text_in_console_1, duration)));
+    let message_2 = value_storage.store_value(Arc::new(Value::from_string("world!\n")));
+    let text_in_console_2 = make_text_in_console(delay, message_2);
+    let _result = reduce_expression_without_storing_the_final_result(
+        text_in_console_2,
+        &services,
+        &value_storage,
+        &value_storage,
+    )
+    .await
+    .unwrap();
+    Ok(())
 }

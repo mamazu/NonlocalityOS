@@ -8,8 +8,6 @@ edition = "2021"
 [dependencies]
 dogbox_blob_layer = { path ="../dogbox/dogbox_blob_layer" }
 tokio = {version = "1", features = ["rt-multi-thread", "macros", "time", "sync"]}
-ratatui = {version = "0", features = []}
-crossterm = {version = "0", features = ["event-stream"]}
 tokio-stream = "0"
 async-stream = "0"
 futures = "0"
