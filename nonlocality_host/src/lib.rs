@@ -1,6 +1,7 @@
 #![feature(array_chunks)]
 use dogbox_blob_layer::BlobDigest;
 use futures::future::join;
+use futures::future::join_all;
 use sha3::{Digest, Sha3_512};
 use std::{
     collections::BTreeMap,
@@ -137,9 +138,10 @@ pub async fn reduce_expression_from_reference(
         storage,
     )
     .await?;
+    let arc_value = Arc::new(value);
     Ok(ReferencedValue::new(
-        storage.store_value(Arc::new(value)),
-        argument_value,
+        storage.store_value(arc_value.clone()),
+        arc_value,
     ))
 }
 
@@ -360,6 +362,93 @@ pub fn to_seconds(value: &Value) -> Option<u64> {
     }
     buf.copy_from_slice(&value.serialized);
     Some(u64::from_be_bytes(buf))
+}
+
+pub fn make_sum(summands: Vec<Reference>) -> Value {
+    Value {
+        type_id: TypeId(6),
+        serialized: Vec::new(),
+        references: summands,
+    }
+}
+
+pub fn to_sum(value: Value) -> Option<Vec<Reference>> {
+    if value.type_id != TypeId(6) {
+        return None;
+    }
+    Some(value.references)
+}
+
+pub struct SumService {}
+
+impl ReduceExpression for SumService {
+    fn reduce<'t>(
+        &'t self,
+        argument: Value,
+        service_resolver: &'t dyn ResolveServiceId,
+        loader: &'t dyn LoadValue,
+        storage: &'t dyn StoreValue,
+    ) -> Pin<Box<dyn std::future::Future<Output = Value> + 't>> {
+        let summands_expressions = to_sum(argument).unwrap();
+        Box::pin(async move {
+            let summands_futures: Vec<_> = summands_expressions
+                .iter()
+                .map(|summand| {
+                    reduce_expression_from_reference(summand, service_resolver, loader, storage)
+                })
+                .collect();
+            let summands_values = futures::future::join_all(summands_futures).await;
+            let sum = summands_values.iter().fold(0u64, |accumulator, element| {
+                let summand = to_seconds(&element.as_ref().unwrap().value).unwrap();
+                u64::checked_add(accumulator, summand).unwrap()
+            });
+            make_seconds(sum)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sum() {
+    let sum_service: Arc<dyn ReduceExpression> = Arc::new(SumService {});
+    let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
+    let services = ServiceRegistry {
+        services: BTreeMap::from([(TypeId(5), identity), (TypeId(6), sum_service)]),
+    };
+    let value_storage = InMemoryValueStorage {
+        reference_to_value: Mutex::new(BTreeMap::new()),
+    };
+    let a = value_storage.store_value(Arc::new(make_seconds(1)));
+    let b = value_storage.store_value(Arc::new(make_seconds(2)));
+    let sum = value_storage.store_value(Arc::new(make_sum(vec![a, b])));
+    let result = reduce_expression_from_reference(&sum, &services, &value_storage, &value_storage)
+        .await
+        .unwrap();
+    assert_eq!(make_seconds(3), *result.value);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_nested_sum() {
+    let sum_service: Arc<dyn ReduceExpression> = Arc::new(SumService {});
+    let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
+    let services = ServiceRegistry {
+        services: BTreeMap::from([(TypeId(5), identity), (TypeId(6), sum_service)]),
+    };
+    let value_storage = InMemoryValueStorage {
+        reference_to_value: Mutex::new(BTreeMap::new()),
+    };
+    let a = value_storage.store_value(Arc::new(make_seconds(1)));
+    let b = value_storage.store_value(Arc::new(make_seconds(2)));
+    let c = value_storage.store_value(Arc::new(make_sum(vec![a.clone(), b])));
+    let sum = make_sum(vec![a.clone(), a, c]);
+    let result = reduce_expression_without_storing_the_final_result(
+        sum,
+        &services,
+        &value_storage,
+        &value_storage,
+    )
+    .await
+    .unwrap();
+    assert_eq!(make_seconds(5), result);
 }
 
 pub fn make_delay(before: Reference, duration: Reference) -> Value {
