@@ -32,7 +32,7 @@ fn download(download_url: &str, download_file_path: &Path) -> Result<(), std::io
         temporary_file.display(),
         download_file_path.display()
     );
-    fs_extra::file::move_file(&temporary_file, &download_file_path, &CopyOptions::new())
+    fs_extra::file::move_file(&temporary_file, download_file_path, &CopyOptions::new())
         .expect("moved temp file");
     println!("Download completed.");
     Ok(())
@@ -51,15 +51,12 @@ fn unpack(
     );
     let temp_unpack_destination_directory = Path::new(&temp_unpack_destination_directory_string);
 
-    match std::fs::metadata(&temp_unpack_destination_directory) {
-        Ok(_) => {
-            println!(
-                "Deleting {} from a previous run.",
-                &temp_unpack_destination_directory.display()
-            );
-            std::fs::remove_dir_all(&temp_unpack_destination_directory)?
-        }
-        Err(_) => {}
+    if let Ok(_) = std::fs::metadata(temp_unpack_destination_directory) {
+        println!(
+            "Deleting {} from a previous run.",
+            &temp_unpack_destination_directory.display()
+        );
+        std::fs::remove_dir_all(temp_unpack_destination_directory)?
     }
 
     println!(
@@ -79,8 +76,8 @@ fn unpack(
         unpack_destination_directory.display()
     );
     std::fs::rename(
-        &temp_unpack_destination_directory,
-        &unpack_destination_directory,
+        temp_unpack_destination_directory,
+        unpack_destination_directory,
     )?;
     Ok(())
 }
@@ -124,7 +121,7 @@ pub fn install_from_downloaded_archive(
         }
     } else {
         println!("File '{}' does not exist.", download_file_path.display());
-        download(&download_url, download_file_path)?;
+        download(download_url, download_file_path)?;
     }
 
     match compression {

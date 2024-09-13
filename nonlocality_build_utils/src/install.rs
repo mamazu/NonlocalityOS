@@ -18,8 +18,7 @@ fn upload_file(
     is_executable: bool,
 ) {
     println!("Uploading {} to {}", from.display(), to);
-    let mut file_to_upload =
-        std::fs::File::open(&from).expect("Tried to open the binary to upload");
+    let mut file_to_upload = std::fs::File::open(from).expect("Tried to open the binary to upload");
     let file_size = file_to_upload
         .metadata()
         .expect("Tried to determine the file size")
@@ -32,7 +31,7 @@ fn upload_file(
     };
     let mut file_uploader = sftp
         .open_mode(
-            &to_std_path(&to),
+            &to_std_path(to),
             OpenFlags::WRITE | OpenFlags::TRUNCATE,
             mode,
             ssh2::OpenType::File,
@@ -121,7 +120,7 @@ pub async fn deploy(
             if exists.is_dir() {
                 println!("Our directory appears to exist.");
             } else {
-                progress_reporter.log(&format!("Our directory is a file!"));
+                progress_reporter.log("Our directory is a file!");
                 return NumberOfErrors(1);
             }
         }
@@ -134,11 +133,11 @@ pub async fn deploy(
     }
 
     let remote_management_service_binary_next =
-        nonlocality_dir.join(&format!("{}.next", MANAGEMENT_SERVICE_NAME));
+        nonlocality_dir.join(format!("{}.next", MANAGEMENT_SERVICE_NAME));
     upload_file(
         &session,
         &sftp,
-        &management_service_binary,
+        management_service_binary,
         &remote_management_service_binary_next,
         true,
     );
@@ -158,7 +157,7 @@ pub async fn deploy(
     upload_file(
         &session,
         &sftp,
-        &local_configuration,
+        local_configuration,
         &remote_configuration,
         false,
     );

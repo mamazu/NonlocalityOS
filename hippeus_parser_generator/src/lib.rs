@@ -97,9 +97,8 @@ impl<'t> Interpreter<'t> {
             let sequence_element =
                 &position_in_innermost_sequence.0[position_in_innermost_sequence.1];
             position_in_innermost_sequence.1 += 1;
-            match self.enter_parser(sequence_element, output) {
-                Some(status) => return status,
-                None => {}
+            if let Some(status) = self.enter_parser(sequence_element, output) {
+                return status;
             }
         }
     }
@@ -126,7 +125,7 @@ impl<'t> Interpreter<'t> {
                 match register_read_result {
                     Some(register_value) => match register_value {
                         RegisterValue::Boolean(true) => {
-                            self.position.push((std::slice::from_ref(&*action), 0));
+                            self.position.push((std::slice::from_ref(action), 0));
                         }
                         RegisterValue::Boolean(false) => {}
                         RegisterValue::Byte(_) => return Some(InterpreterStatus::ErrorInParser),
@@ -171,7 +170,7 @@ impl<'t> Interpreter<'t> {
                             // this is the loop magic:
                             self.position.last_mut().unwrap().1 -= 1;
 
-                            self.position.push((std::slice::from_ref(&*body), 0));
+                            self.position.push((std::slice::from_ref(body), 0));
                         }
                         RegisterValue::Boolean(false) => {}
                         RegisterValue::Byte(_) => return Some(InterpreterStatus::ErrorInParser),
@@ -205,17 +204,23 @@ impl<'t> Interpreter<'t> {
             Parser::Add {
                 destination,
                 summand,
-            } => match self.calculate_binary_operation(*destination, *summand, u8::checked_add) {
-                Some(status) => return Some(status),
-                None => {}
-            },
+            } => {
+                if let Some(status) =
+                    self.calculate_binary_operation(*destination, *summand, u8::checked_add)
+                {
+                    return Some(status);
+                }
+            }
             Parser::Multiply {
                 destination,
                 factor,
-            } => match self.calculate_binary_operation(*destination, *factor, u8::checked_mul) {
-                Some(status) => return Some(status),
-                None => {}
-            },
+            } => {
+                if let Some(status) =
+                    self.calculate_binary_operation(*destination, *factor, u8::checked_mul)
+                {
+                    return Some(status);
+                }
+            }
         }
         None
     }

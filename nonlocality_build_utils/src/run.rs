@@ -47,7 +47,7 @@ pub async fn run_process_with_error_only_output(
     );*/
     let maybe_output = tokio::process::Command::new(executable)
         .args(arguments)
-        .current_dir(&working_directory)
+        .current_dir(working_directory)
         .envs(environment_variables)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -97,10 +97,10 @@ pub async fn run_cargo(
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
-        &working_directory,
+        working_directory,
         std::path::Path::new("cargo"),
-        &arguments,
-        &environment_variables,
+        arguments,
+        environment_variables,
         progress_reporter,
     )
     .await
@@ -127,7 +127,7 @@ pub async fn run_cargo_test(
         HashMap::new()
     };
     run_cargo(
-        &project,
+        project,
         &["nextest", "run"],
         &environment_variables,
         progress_reporter,
@@ -140,7 +140,7 @@ pub async fn run_cargo_build_for_host(
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_cargo(
-        &project,
+        project,
         &["build", "--verbose", "--release"],
         &HashMap::new(),
         progress_reporter,
@@ -152,5 +152,5 @@ pub async fn run_cargo_fmt(
     project: &std::path::Path,
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
-    run_cargo(&project, &["fmt"], &HashMap::new(), progress_reporter).await
+    run_cargo(project, &["fmt"], &HashMap::new(), progress_reporter).await
 }

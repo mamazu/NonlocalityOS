@@ -18,12 +18,12 @@ pub enum FileNameError {
     AsciiControlCharacter,
     /// < (less than)
     /// > (greater than)
-    /// : (colon - sometimes works, but is actually NTFS Alternate Data Streams)
-    /// " (double quote)
-    /// / (forward slash)
-    /// \ (backslash)
-    /// | (vertical bar or pipe)
-    /// ? (question mark)
+    /// > : (colon - sometimes works, but is actually NTFS Alternate Data Streams)
+    /// > " (double quote)
+    /// > / (forward slash)
+    /// > \ (backslash)
+    /// > | (vertical bar or pipe)
+    /// > ? (question mark)
     /// * (asterisk)
     WindowsSpecialCharacter,
 }
@@ -54,7 +54,7 @@ impl FileNameContent {
                 _ => { /* anything else is ok */ }
             }
         }
-        return Ok(FileNameContent(content));
+        Ok(FileNameContent(content))
     }
 }
 
@@ -140,7 +140,7 @@ impl TryFrom<String> for FileName {
     type Error = FileNameError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        FileNameContent::try_from(value).map(|content| FileName { content: content })
+        FileNameContent::try_from(value).map(|content| FileName { content })
     }
 }
 
@@ -167,10 +167,7 @@ pub struct DirectoryEntry {
 
 impl DirectoryEntry {
     pub fn new(kind: DirectoryEntryKind, digest: BlobDigest) -> DirectoryEntry {
-        DirectoryEntry {
-            kind: kind,
-            digest: digest,
-        }
+        DirectoryEntry { kind, digest }
     }
 }
 
@@ -181,6 +178,6 @@ pub struct DirectoryTree {
 
 impl DirectoryTree {
     pub fn new(children: std::collections::BTreeMap<FileName, DirectoryEntry>) -> DirectoryTree {
-        DirectoryTree { children: children }
+        DirectoryTree { children }
     }
 }

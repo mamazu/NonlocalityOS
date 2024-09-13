@@ -6,7 +6,7 @@ pub async fn install_grcov(
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_cargo(
-        &working_directory,
+        working_directory,
         &["install", "grcov"],
         &HashMap::new(),
         progress_reporter,
@@ -21,7 +21,7 @@ pub async fn generate_coverage_report_with_grcov(
     progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
 ) -> NumberOfErrors {
     run_process_with_error_only_output(
-        &repository,
+        repository,
         std::path::Path::new("grcov"),
         &[
             coverage_info_directory
@@ -56,8 +56,8 @@ pub async fn generate_coverage_report_with_grcov(
 }
 
 pub fn delete_directory(root: &std::path::Path) -> NumberOfErrors {
-    match std::fs::metadata(&root) {
-        Ok(_) => match std::fs::remove_dir_all(&root) {
+    match std::fs::metadata(root) {
+        Ok(_) => match std::fs::remove_dir_all(root) {
             Ok(_) => NumberOfErrors(0),
             Err(error) => {
                 println!("Could not delete {}: {}", root.display(), error);

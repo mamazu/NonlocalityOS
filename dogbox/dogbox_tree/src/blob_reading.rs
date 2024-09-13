@@ -3,11 +3,9 @@ use crate::serialization::{DirectoryTree, FileName};
 use async_stream::stream;
 use async_trait::async_trait;
 use dogbox_blob_layer::{BlobDigest, MemoryBlobStore};
-use futures_util::StreamExt;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
 struct BlobReadFile {
@@ -163,7 +161,7 @@ async fn test_blob_read_directory_enumerate_empty() {
         read_blob: Arc::new(DoNotUse {}),
     };
     let mut entries = directory.enumerate().await.unwrap();
-    let entry = entries.next().await;
+    let entry = futures_util::StreamExt::next(&mut entries).await;
     assert!(entry.is_none());
 }
 
@@ -198,16 +196,16 @@ async fn test_blob_read_directory_enumerate_non_empty() {
             dir_name,
             crate::reading::DirectoryEntryInfo::Directory
         ),
-        entries.next().await.unwrap()
+        futures_util::StreamExt::next(&mut entries).await.unwrap()
     );
     assert_eq!(
         crate::reading::DirectoryEntry::new(
             file_name,
             crate::reading::DirectoryEntryInfo::File(file_size)
         ),
-        entries.next().await.unwrap()
+        futures_util::StreamExt::next(&mut entries).await.unwrap()
     );
-    assert!(entries.next().await.is_none());
+    assert!(futures_util::StreamExt::next(&mut entries).await.is_none());
 }
 
 #[tokio::test]
@@ -256,7 +254,12 @@ async fn test_blob_read_directory_access_entry_file() {
         EntryAccessor::File(read_file) => {
             let mut opened = read_file.open().await.unwrap();
             let mut buffer = Vec::new();
-            assert_eq!(file_size, opened.read_to_end(&mut buffer).await.unwrap());
+            assert_eq!(
+                file_size,
+                tokio::io::AsyncReadExt::read_to_end(&mut opened, &mut buffer)
+                    .await
+                    .unwrap()
+            );
         }
     }
 }

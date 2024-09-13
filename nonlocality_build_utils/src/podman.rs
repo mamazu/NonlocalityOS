@@ -1,14 +1,9 @@
-use futures_util::{StreamExt, TryStreamExt};
-use podman_api::conn::TtyChunk;
-use podman_api::opts::{ContainerCreateOpts, ContainerLogsOpts};
-use podman_api::ApiVersion;
-use podman_api::Error;
 use std::path::Path;
 
-async fn enable_podman_unix_socket() {
+pub async fn enable_podman_unix_socket() {
     let program = Path::new("/usr/bin/systemctl");
     let maybe_output = tokio::process::Command::new(program)
-        .args(&["--user", "enable", "--now", "podman.socket"])
+        .args(["--user", "enable", "--now", "podman.socket"])
         .current_dir("/")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -42,7 +37,7 @@ async fn test_podman() {
     enable_podman_unix_socket().await;
     let podman = podman_api::Podman::unix_versioned(
         format!("/run/user/{}/podman/podman.sock", users::get_current_uid()),
-        ApiVersion::new(4, Some(3), Some(1)),
+        podman_api::ApiVersion::new(4, Some(3), Some(1)),
     );
     println!("Socket enabled");
     let image_id = 'a: {
@@ -53,20 +48,20 @@ async fn test_podman() {
         if let Some(existing_id) = inspection.id {
             break 'a existing_id;
         }
-        let events = podman
-            .images()
-            .pull(
-                &podman_api::opts::PullOpts::builder()
-                    .reference(format!("docker.io/library/{}", docker_image_name_bla))
-                    .build(),
-            )
-            .map(|report| {
-                report.and_then(|report| match report.error {
-                    Some(error) => Err(Error::InvalidResponse(error)),
-                    None => Ok(report),
-                })
-            })
-            .try_collect::<Vec<_>>()
+        let events =
+            futures_util::TryStreamExt::try_collect::<Vec<_>>(futures_util::StreamExt::map(
+                podman.images().pull(
+                    &podman_api::opts::PullOpts::builder()
+                        .reference(format!("docker.io/library/{}", docker_image_name_bla))
+                        .build(),
+                ),
+                |report| {
+                    report.and_then(|report| match report.error {
+                        Some(error) => Err(podman_api::Error::InvalidResponse(error)),
+                        None => Ok(report),
+                    })
+                },
+            ))
             .await
             .unwrap();
         let mut image_id_result = None;
@@ -83,7 +78,7 @@ async fn test_podman() {
     let container_created = podman
         .containers()
         .create(
-            &ContainerCreateOpts::builder()
+            &podman_api::opts::ContainerCreateOpts::builder()
                 .image(&image_id)
                 .command(["/usr/bin/sleep", "9"])
                 .build(),
@@ -110,18 +105,18 @@ async fn test_podman() {
     let container2 = podman.containers().get(container_created.id);
     let logger = tokio::spawn(async move {
         let mut logs = container2.logs(
-            &ContainerLogsOpts::builder()
+            &podman_api::opts::ContainerLogsOpts::builder()
                 .stdout(true)
                 .stderr(true)
                 .follow(true)
                 .build(),
         );
-        while let Some(chunk) = logs.next().await {
+        while let Some(chunk) = futures_util::StreamExt::next(&mut logs).await {
             match chunk.unwrap() {
-                TtyChunk::StdOut(data) => {
+                podman_api::conn::TtyChunk::StdOut(data) => {
                     println!("{}", String::from_utf8_lossy(&data));
                 }
-                TtyChunk::StdErr(data) => {
+                podman_api::conn::TtyChunk::StdErr(data) => {
                     eprintln!("{}", String::from_utf8_lossy(&data));
                 }
                 _ => {}
@@ -160,12 +155,12 @@ async fn test_podman() {
 
     let opts = Default::default();
     let mut stream = exec.start(&opts).await.unwrap().unwrap();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
         match chunk.unwrap() {
-            TtyChunk::StdOut(data) => {
+            podman_api::conn::TtyChunk::StdOut(data) => {
                 println!("{}", String::from_utf8_lossy(&data));
             }
-            TtyChunk::StdErr(data) => {
+            podman_api::conn::TtyChunk::StdErr(data) => {
                 eprintln!("{}", String::from_utf8_lossy(&data));
             }
             _ => {}

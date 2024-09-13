@@ -26,7 +26,7 @@ pub async fn install_raspberry_pi_cpp_compiler(
     let archive_file_name = format!("{}.tar.xz", compiler_name);
     let unpacked_directory = tools_directory.join("raspberry_pi_compiler");
     match downloads::install_from_downloaded_archive(
-        &download_url,
+        download_url,
         &tools_directory.join(&archive_file_name),
         &unpacked_directory,
         downloads::Compression::Xz,
@@ -35,7 +35,7 @@ pub async fn install_raspberry_pi_cpp_compiler(
             NumberOfErrors(0),
             Some(RaspberryPi64Target {
                 compiler_installation: unpacked_directory.join(compiler_name),
-                host: host,
+                host,
             }),
         ),
         Err(error) => {
@@ -82,7 +82,7 @@ pub async fn run_cargo_build_for_raspberry_pi(
         ("LD_LIBRARY_PATH".to_string(), library_path_str.to_string()),
     ]);
     run_cargo(
-        &project,
+        project,
         &[
             "build",
             "--verbose",

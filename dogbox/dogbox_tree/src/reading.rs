@@ -23,10 +23,7 @@ pub struct DirectoryEntry {
 
 impl DirectoryEntry {
     pub fn new(name: FileName, info: DirectoryEntryInfo) -> DirectoryEntry {
-        DirectoryEntry {
-            name: name,
-            info: info,
-        }
+        DirectoryEntry { name, info }
     }
 }
 

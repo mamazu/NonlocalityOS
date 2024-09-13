@@ -37,8 +37,8 @@ pub fn accept() -> std::io::Result<Accepted> {
 
 pub fn connect(interface: i32) -> File {
     let file_descriptor = unsafe { nonlocality_connect(interface) };
-    let stream = fd_to_object(file_descriptor);
-    stream
+
+    fd_to_object(file_descriptor)
 }
 
 pub fn tcp_ssl_handshake(host: &str, port: u16) -> std::io::Result<File> {

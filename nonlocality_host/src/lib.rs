@@ -1,7 +1,6 @@
 #![feature(array_chunks)]
 use dogbox_blob_layer::BlobDigest;
 use futures::future::join;
-use futures::future::join_all;
 use sha3::{Digest, Sha3_512};
 use std::{
     collections::BTreeMap,
@@ -114,10 +113,7 @@ pub struct ReferencedValue {
 
 impl ReferencedValue {
     fn new(reference: Reference, value: Arc<Value>) -> ReferencedValue {
-        ReferencedValue {
-            reference: reference,
-            value: value,
-        }
+        ReferencedValue { reference, value }
     }
 }
 
@@ -151,7 +147,7 @@ pub struct ServiceRegistry {
 
 impl ServiceRegistry {
     pub fn new(services: BTreeMap<TypeId, Arc<dyn ReduceExpression>>) -> ServiceRegistry {
-        ServiceRegistry { services: services }
+        ServiceRegistry { services }
     }
 }
 
@@ -212,12 +208,12 @@ impl ReduceExpression for Identity {
 
 pub fn calculate_reference(referenced: &Value) -> Reference {
     let mut hasher = Sha3_512::new();
-    hasher.update(&referenced.type_id.0.to_be_bytes());
+    hasher.update(referenced.type_id.0.to_be_bytes());
     hasher.update(&referenced.serialized);
     for item in &referenced.references {
-        hasher.update(&item.type_id.0.to_be_bytes());
-        hasher.update(&item.digest.0 .0);
-        hasher.update(&item.digest.0 .1);
+        hasher.update(item.type_id.0.to_be_bytes());
+        hasher.update(item.digest.0 .0);
+        hasher.update(item.digest.0 .1);
     }
     let result = hasher.finalize();
     let slice: &[u8] = result.as_slice();
@@ -244,16 +240,14 @@ pub struct InMemoryValueStorage {
 
 impl InMemoryValueStorage {
     pub fn new(reference_to_value: Mutex<BTreeMap<Reference, Arc<Value>>>) -> InMemoryValueStorage {
-        InMemoryValueStorage {
-            reference_to_value: reference_to_value,
-        }
+        InMemoryValueStorage { reference_to_value }
     }
 }
 
 impl StoreValue for InMemoryValueStorage {
     fn store_value(&self, value: Arc<Value>) -> Reference {
         let mut lock = self.reference_to_value.lock().unwrap();
-        let reference = calculate_reference(&*value);
+        let reference = calculate_reference(&value);
         if !lock.contains_key(&reference) {
             lock.insert(reference.clone(), value);
         }

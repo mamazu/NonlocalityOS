@@ -55,7 +55,7 @@ pub async fn install_wasi_cpp_compiler(
                     NumberOfErrors(0),
                     Some(WasiSdk {
                         wasi_sdk: sub_dir,
-                        host: host,
+                        host,
                     }),
                 )
             } else {
@@ -92,11 +92,11 @@ pub async fn run_cargo_build_wasi_threads(
         .expect("Tried to convert a path to a string");
     let clang_exe = wasi_sdk
         .join("bin")
-        .join(&add_executable_ending(host, "clang"));
+        .join(add_executable_ending(host, "clang"));
     let clang_exe_str = clang_exe
         .to_str()
         .expect("Tried to convert a path to a string");
-    run_process_with_error_only_output(&project, std::path::Path::new(
+    run_process_with_error_only_output(project, std::path::Path::new(
          "cargo"), &["build", "--verbose", "--release", "--target", target_name], &HashMap::from([
         ("CFLAGS".to_string(), "-pthread".to_string()),
         ("RUSTFLAGS".to_string(), format!("-C target-feature=-crt-static -C link-arg=-L{} -C link-arg=-lclang_rt.builtins-wasm32",
