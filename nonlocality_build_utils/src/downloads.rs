@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use curl::easy::Easy;
 use flate2::read::GzDecoder;
 use fs_extra::file::CopyOptions;

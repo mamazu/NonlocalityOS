@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use anyhow::bail;
 use display_bytes::display_bytes;
 use essrpc::transports::BincodeTransport;

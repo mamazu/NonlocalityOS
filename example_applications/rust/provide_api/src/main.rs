@@ -1,5 +1,3 @@
-#[deny(warnings)]
-
 fn main() -> Result<(), std::io::Error> {
     use nonlocality_env::accept;
     use std::io::Read;

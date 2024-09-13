@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use dogbox_blob_layer::BlobDigest;
 use essrpc::essrpc;
 use essrpc::RPCError;

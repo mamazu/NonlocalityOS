@@ -1,4 +1,3 @@
-#[deny(warnings)]
 #[cfg(any(unix, target_os = "wasi"))]
 fn main() -> Result<(), std::io::Error> {
     use std::fs::File;

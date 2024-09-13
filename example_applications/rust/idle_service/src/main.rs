@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use std::{thread, time};
 
 fn main() {

@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCError;
 use essrpc::RPCServer;

@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use essrpc::transports::BincodeTransport;
 use essrpc::RPCClient;
 use log_trait::LogLevel;

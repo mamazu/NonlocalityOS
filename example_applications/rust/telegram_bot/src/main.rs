@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use nonlocality_env::tcp_ssl_handshake;
 use std::io::Read;
 use std::io::Write;

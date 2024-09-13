@@ -1,6 +1,5 @@
 #![feature(array_chunks)]
 use async_trait::async_trait;
-#[deny(warnings)]
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_512};
 

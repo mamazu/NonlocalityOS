@@ -1,4 +1,3 @@
-#![deny(warnings)]
 use async_recursion::async_recursion;
 use nonlocality_build_utils::coverage::delete_directory;
 use nonlocality_build_utils::coverage::generate_coverage_report_with_grcov;

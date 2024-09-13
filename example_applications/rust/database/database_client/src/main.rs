@@ -1,4 +1,3 @@
-#[deny(warnings)]
 use database_trait::ExampleDatabase;
 use database_trait::ExampleDatabaseRPCClient;
 use essrpc::transports::BincodeTransport;
