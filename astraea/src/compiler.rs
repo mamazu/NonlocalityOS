@@ -6,6 +6,7 @@ use std::sync::Arc;
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum TokenContent {
     Whitespace,
+    Identifier(String),
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -98,15 +99,41 @@ fn tokenize(source: &str, syntax: &hippeus_parser_generator::Parser) -> Vec<Toke
                 output,
                 has_extraneous_input,
             } => {
-                for chunk in &output {
-                    tokens.push(match chunk {
-                        Some(blob) => {
-                            let token_content: TokenContent = postcard::from_bytes(&blob[..])
-                                .expect("the token parser generated invalid postcard data");
-                            Token::new(token_content, previous_source_location)
+                if !output.is_empty() {
+                    let mut object_buffer = Vec::new();
+                    let mut postcard_length_prefix_mode: Option<Vec<u8>> = None;
+                    for chunk in &output {
+                        match chunk {
+                            Some(blob) => match &mut postcard_length_prefix_mode {
+                                Some(buffer) => {
+                                    buffer.extend_from_slice(&blob);
+                                }
+                                None => {
+                                    object_buffer.extend_from_slice(&blob);
+                                }
+                            },
+                            None => {
+                                match &mut postcard_length_prefix_mode {
+                                    Some(buffer) => {
+                                        // https://postcard.jamesmunns.com/wire-format.html#16---byte-array
+                                        if buffer.len() > 127 {
+                                            todo!("Support variable length byte arrays longer than 127 bytes");
+                                        }
+                                        object_buffer.push(buffer.len() as u8);
+                                        object_buffer.extend_from_slice(&buffer);
+                                        postcard_length_prefix_mode = None;
+                                    }
+                                    None => {
+                                        postcard_length_prefix_mode = Some(Vec::new());
+                                    }
+                                }
+                            }
                         }
-                        None => todo!(),
-                    });
+                    }
+                    assert!(postcard_length_prefix_mode.is_none(), "the token parser failed to generate a final separator after a variable-length byte array");
+                    let token_content: TokenContent = postcard::from_bytes(&object_buffer[..])
+                        .expect("the token parser generated invalid postcard data");
+                    tokens.push(Token::new(token_content, previous_source_location));
                 }
                 if !has_extraneous_input {
                     return tokens;
@@ -136,6 +163,10 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
         hippeus_parser_generator::RegisterId(3);
     const TOKEN_TAG_WHITESPACE: hippeus_parser_generator::RegisterId =
         hippeus_parser_generator::RegisterId(4);
+    const TOKEN_TAG_IDENTIFIER: hippeus_parser_generator::RegisterId =
+        hippeus_parser_generator::RegisterId(5);
+    const LOOP_CONDITION: hippeus_parser_generator::RegisterId =
+        hippeus_parser_generator::RegisterId(6);
     lazy_static! {
         static ref TOKEN_PARSER: hippeus_parser_generator::Parser =
             hippeus_parser_generator::Parser::Sequence(vec![
@@ -148,6 +179,8 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
                     IS_INPUT_AVAILABLE,
                     Box::new(hippeus_parser_generator::Parser::Sequence(vec![
                         hippeus_parser_generator::Parser::ReadInputByte(INPUT),
+
+                        // whitespace
                         hippeus_parser_generator::Parser::IsAnyOf {
                             input: INPUT,
                             result: IS_ANY_OF_RESULT,
@@ -167,7 +200,61 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
                                     TOKEN_TAG_WHITESPACE
                                 )
                             ]))
-                        )
+                        ),
+
+                        // identifier
+                        hippeus_parser_generator::Parser::IsAnyOf {
+                            input: INPUT,
+                            result: IS_ANY_OF_RESULT,
+                            candidates: (b'a'..b'z').map(|c|
+                                hippeus_parser_generator::RegisterValue::Byte( c)).collect(),
+                        },
+                        hippeus_parser_generator::Parser::Condition(
+                            IS_ANY_OF_RESULT,
+                            Box::new(hippeus_parser_generator::Parser::Sequence(vec![
+                                hippeus_parser_generator::Parser::Constant(
+                                    TOKEN_TAG_IDENTIFIER,
+                                    hippeus_parser_generator::RegisterValue::Byte(1)
+                                ),
+                                hippeus_parser_generator::Parser::WriteOutputByte(
+                                    TOKEN_TAG_IDENTIFIER
+                                ),
+                                // convention: separator starts a variable-length byte array
+                                hippeus_parser_generator::Parser::WriteOutputSeparator,
+                                hippeus_parser_generator::Parser::Constant(
+                                    LOOP_CONDITION,
+                                    hippeus_parser_generator::RegisterValue::Boolean(true)
+                                ),
+                                hippeus_parser_generator::Parser::Loop{condition: LOOP_CONDITION, body: Box::new(
+                                    hippeus_parser_generator::Parser::Sequence(vec![
+                                        hippeus_parser_generator::Parser::WriteOutputByte(INPUT ),
+                                        hippeus_parser_generator::Parser::IsEndOfInput(IS_END_OF_INPUT),
+                                        hippeus_parser_generator::Parser::Not {
+                                            from: IS_END_OF_INPUT,
+                                            to: LOOP_CONDITION,
+                                        },hippeus_parser_generator::Parser::Condition(
+                                            LOOP_CONDITION,
+                                            Box::new(hippeus_parser_generator::Parser::Sequence(vec![
+                                                hippeus_parser_generator::Parser::PeekInputByte(INPUT),
+                                                hippeus_parser_generator::Parser::IsAnyOf {
+                                                    input: INPUT,
+                                                    result: LOOP_CONDITION,
+                                                    candidates: (b'a'..b'z').map(|c|
+                                                        hippeus_parser_generator::RegisterValue::Byte( c)).collect(),
+                                                },
+                                                hippeus_parser_generator::Parser::Condition(
+                                                    LOOP_CONDITION,
+                                                    Box::new( hippeus_parser_generator::Parser::Sequence(vec![
+                                                        // pop the byte we had peeked at before
+                                                        hippeus_parser_generator::Parser::ReadInputByte(INPUT),
+                                                        ]))),
+                                            ]))),
+                                    ])
+                                )},
+                                // convention: separator also ends a variable-length byte array
+                                hippeus_parser_generator::Parser::WriteOutputSeparator,
+                            ]))
+                        ),
                     ])),
                 ),
             ]);
@@ -202,6 +289,50 @@ fn test_tokenize_default_syntax_newline() {
         "\n",
         &[Token {
             content: TokenContent::Whitespace,
+            location: SourceLocation { line: 0, column: 0 },
+        }],
+    );
+}
+
+#[test]
+fn test_tokenize_default_syntax_source_locations() {
+    test_tokenize_default_syntax(
+        " \n  test\n",
+        &[
+            Token {
+                content: TokenContent::Whitespace,
+                location: SourceLocation { line: 0, column: 0 },
+            },
+            Token {
+                content: TokenContent::Whitespace,
+                location: SourceLocation { line: 0, column: 1 },
+            },
+            Token {
+                content: TokenContent::Whitespace,
+                location: SourceLocation { line: 1, column: 0 },
+            },
+            Token {
+                content: TokenContent::Whitespace,
+                location: SourceLocation { line: 1, column: 1 },
+            },
+            Token {
+                content: TokenContent::Identifier("test".to_string()),
+                location: SourceLocation { line: 1, column: 2 },
+            },
+            Token {
+                content: TokenContent::Whitespace,
+                location: SourceLocation { line: 1, column: 6 },
+            },
+        ],
+    );
+}
+
+#[test]
+fn test_tokenize_default_syntax_identifier() {
+    test_tokenize_default_syntax(
+        "test",
+        &[Token {
+            content: TokenContent::Identifier("test".to_string()),
             location: SourceLocation { line: 0, column: 0 },
         }],
     );

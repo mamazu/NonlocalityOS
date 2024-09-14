@@ -13,6 +13,7 @@ pub enum RegisterValue {
 pub enum Parser {
     IsEndOfInput(RegisterId),
     ReadInputByte(RegisterId),
+    PeekInputByte(RegisterId),
     Condition(RegisterId, Box<Parser>),
     Fail,
     Sequence(Vec<Parser>),
@@ -23,7 +24,10 @@ pub enum Parser {
     Constant(RegisterId, RegisterValue),
     WriteOutputByte(RegisterId),
     WriteOutputSeparator,
-    Loop(RegisterId, Box<Parser>),
+    Loop {
+        condition: RegisterId,
+        body: Box<Parser>,
+    },
     RequireDigit {
         input: RegisterId,
         output: RegisterId,
@@ -44,6 +48,7 @@ pub enum Parser {
 }
 
 pub enum InterpreterStatus {
+    Continue,
     WaitingForInput,
     Failed,
     Completed,
@@ -125,6 +130,13 @@ impl<'t> Interpreter<'t> {
                 }
                 None => return Some(InterpreterStatus::Failed),
             },
+            Parser::PeekInputByte(destination) => match self.buffered_input {
+                Some(byte) => {
+                    self.write_register(*destination, &RegisterValue::Byte(byte));
+                    return Some(InterpreterStatus::Continue);
+                }
+                None => return Some(InterpreterStatus::Failed),
+            },
             Parser::Condition(cause, action) => {
                 let register_read_result = self.registers.get(cause);
                 match register_read_result {
@@ -167,7 +179,7 @@ impl<'t> Interpreter<'t> {
                 }
             }
             Parser::WriteOutputSeparator => output.write_separator(),
-            Parser::Loop(condition, body) => {
+            Parser::Loop { condition, body } => {
                 let register_read_result = self.registers.get(condition);
                 match register_read_result {
                     Some(register_value) => match register_value {
@@ -332,15 +344,21 @@ impl WriteOutput for Ignorance {
     fn write_separator(&mut self) {}
 }
 
-pub fn is_match(parser: &Parser, input: &mut dyn ReadInput) -> Option<bool> {
+pub fn is_match(parser: &Parser, input: &mut dyn ReadPeekInput) -> Option<bool> {
     let mut interpreter = Interpreter::new(parser);
     loop {
-        let next = input.read_input();
+        let next = input.peek_input();
         let status = interpreter.advance_with_input(next, &mut Ignorance {});
         match status {
-            InterpreterStatus::WaitingForInput => {}
+            InterpreterStatus::Continue => {}
+            InterpreterStatus::WaitingForInput => {
+                assert_eq!(next, input.read_input());
+            }
             InterpreterStatus::Failed => return Some(false),
-            InterpreterStatus::Completed => return Some(true),
+            InterpreterStatus::Completed => {
+                assert_eq!(next, input.read_input());
+                return Some(true);
+            }
             InterpreterStatus::CompletedWithExtraneousInput => return Some(false),
             InterpreterStatus::ErrorInParser => return None,
         }
@@ -392,6 +410,7 @@ pub fn parse(parser: &Parser, input: &mut dyn ReadPeekInput) -> ParseResult {
         let next = input.peek_input();
         let status = interpreter.advance_with_input(next, &mut output_buffer);
         match status {
+            InterpreterStatus::Continue => {}
             InterpreterStatus::WaitingForInput => {
                 assert_eq!(next, input.read_input());
             }
@@ -628,9 +647,9 @@ fn test_number_parsing() {
         Parser::Constant(accumulator, RegisterValue::Byte(0)),
         Parser::Constant(loop_condition, RegisterValue::Boolean(true)),
         Parser::Constant(constant_10, RegisterValue::Byte(10)),
-        Parser::Loop(
-            loop_condition,
-            Box::new(Parser::Sequence(vec![
+        Parser::Loop {
+            condition: loop_condition,
+            body: Box::new(Parser::Sequence(vec![
                 Parser::ReadInputByte(input_byte),
                 Parser::RequireDigit {
                     input: input_byte,
@@ -650,7 +669,7 @@ fn test_number_parsing() {
                     to: loop_condition,
                 },
             ])),
-        ),
+        },
         Parser::WriteOutputByte(accumulator),
     ]);
     let result = parse(&parser, &mut Slice::new("123"));
