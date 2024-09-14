@@ -21,6 +21,10 @@ pub enum Parser {
         from: RegisterId,
         to: RegisterId,
     },
+    Copy {
+        from: RegisterId,
+        to: RegisterId,
+    },
     Constant(RegisterId, RegisterValue),
     WriteOutputByte(RegisterId),
     WriteOutputSeparator,
@@ -164,6 +168,15 @@ impl<'t> Interpreter<'t> {
                     None => return Some(InterpreterStatus::ErrorInParser),
                 };
                 self.write_register(*to, &RegisterValue::Boolean(result_of_not_operation));
+            }
+            Parser::Copy { from, to } => {
+                let register_read_result = self.registers.get(from);
+                match register_read_result {
+                    Some(register_value) => {
+                        self.write_register(*to, &register_value.clone());
+                    }
+                    None => return Some(InterpreterStatus::ErrorInParser),
+                }
             }
             Parser::Constant(destination, value) => {
                 self.write_register(*destination, value);
