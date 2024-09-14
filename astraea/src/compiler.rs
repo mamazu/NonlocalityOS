@@ -7,6 +7,8 @@ use std::sync::Arc;
 pub enum TokenContent {
     Whitespace,
     Identifier(String),
+    // =
+    Assign,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -167,6 +169,8 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
         hippeus_parser_generator::RegisterId(5);
     const LOOP_CONDITION: hippeus_parser_generator::RegisterId =
         hippeus_parser_generator::RegisterId(6);
+    const TOKEN_TAG_ASSIGN: hippeus_parser_generator::RegisterId =
+        hippeus_parser_generator::RegisterId(7);
     lazy_static! {
         static ref TOKEN_PARSER: hippeus_parser_generator::Parser =
             hippeus_parser_generator::Parser::Sequence(vec![
@@ -255,6 +259,27 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
                                 hippeus_parser_generator::Parser::WriteOutputSeparator,
                             ]))
                         ),
+
+                        // assign
+                        hippeus_parser_generator::Parser::IsAnyOf {
+                            input: INPUT,
+                            result: IS_ANY_OF_RESULT,
+                            candidates: vec![
+                                hippeus_parser_generator::RegisterValue::Byte(b'=')
+                            ]
+                        },
+                        hippeus_parser_generator::Parser::Condition(
+                            IS_ANY_OF_RESULT,
+                            Box::new(hippeus_parser_generator::Parser::Sequence(vec![
+                                hippeus_parser_generator::Parser::Constant(
+                                    TOKEN_TAG_ASSIGN,
+                                    hippeus_parser_generator::RegisterValue::Byte(2)
+                                ),
+                                hippeus_parser_generator::Parser::WriteOutputByte(
+                                    TOKEN_TAG_ASSIGN
+                                )
+                            ]))
+                        ),
                     ])),
                 ),
             ]);
@@ -297,7 +322,7 @@ fn test_tokenize_default_syntax_newline() {
 #[test]
 fn test_tokenize_default_syntax_source_locations() {
     test_tokenize_default_syntax(
-        " \n  test\n",
+        " \n  test=\n",
         &[
             Token {
                 content: TokenContent::Whitespace,
@@ -320,8 +345,12 @@ fn test_tokenize_default_syntax_source_locations() {
                 location: SourceLocation { line: 1, column: 2 },
             },
             Token {
-                content: TokenContent::Whitespace,
+                content: TokenContent::Assign,
                 location: SourceLocation { line: 1, column: 6 },
+            },
+            Token {
+                content: TokenContent::Whitespace,
+                location: SourceLocation { line: 1, column: 7 },
             },
         ],
     );
@@ -333,6 +362,17 @@ fn test_tokenize_default_syntax_identifier() {
         "test",
         &[Token {
             content: TokenContent::Identifier("test".to_string()),
+            location: SourceLocation { line: 0, column: 0 },
+        }],
+    );
+}
+
+#[test]
+fn test_tokenize_default_syntax_assign() {
+    test_tokenize_default_syntax(
+        "=",
+        &[Token {
+            content: TokenContent::Assign,
             location: SourceLocation { line: 0, column: 0 },
         }],
     );
