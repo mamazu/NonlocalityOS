@@ -1,4 +1,7 @@
-use crate::tree::{CompilerOutput, InMemoryValueStorage, LoadValue, StoreValue, TypeId, Value};
+use crate::tree::{
+    CompilerError, CompilerOutput, InMemoryValueStorage, LoadValue, SourceLocation, StoreValue,
+    TypeId, TypedReference, Value,
+};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -11,24 +14,18 @@ pub enum TokenContent {
     Assign,
     // ^
     Caret,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct SourceLocation {
-    pub line: usize,
-    pub column: usize,
-}
-
-impl SourceLocation {
-    pub fn new(line: usize, column: usize) -> Self {
-        Self { line, column }
-    }
+    // (
+    LeftParenthesis,
+    // )
+    RightParenthesis,
+    // .
+    Dot,
 }
 
 #[derive(PartialEq, Debug)]
 pub struct Token {
     content: TokenContent,
-    location: SourceLocation,
+    location: crate::tree::SourceLocation,
 }
 
 impl Token {
@@ -180,6 +177,12 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
         hippeus_parser_generator::RegisterId(9);
     const TOKEN_TAG_CARET: hippeus_parser_generator::RegisterId =
         hippeus_parser_generator::RegisterId(10);
+    const TOKEN_TAG_LEFT_PARENTHESIS: hippeus_parser_generator::RegisterId =
+        hippeus_parser_generator::RegisterId(11);
+    const TOKEN_TAG_RIGHT_PARENTHESIS: hippeus_parser_generator::RegisterId =
+        hippeus_parser_generator::RegisterId(12);
+    const TOKEN_TAG_DOT: hippeus_parser_generator::RegisterId =
+        hippeus_parser_generator::RegisterId(13);
     lazy_static! {
         static ref TOKEN_PARSER: hippeus_parser_generator::Parser =
             hippeus_parser_generator::Parser::Sequence(vec![
@@ -312,6 +315,69 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
                                 )
                             ]))
                         ),
+
+                        // left parenthesis
+                        hippeus_parser_generator::Parser::IsAnyOf {
+                            input: FIRST_INPUT,
+                            result: IS_ANY_OF_RESULT,
+                            candidates: vec![
+                                hippeus_parser_generator::RegisterValue::Byte(b'(')
+                            ]
+                        },
+                        hippeus_parser_generator::Parser::Condition(
+                            IS_ANY_OF_RESULT,
+                            Box::new(hippeus_parser_generator::Parser::Sequence(vec![
+                                hippeus_parser_generator::Parser::Constant(
+                                    TOKEN_TAG_LEFT_PARENTHESIS,
+                                    hippeus_parser_generator::RegisterValue::Byte(4)
+                                ),
+                                hippeus_parser_generator::Parser::WriteOutputByte(
+                                    TOKEN_TAG_LEFT_PARENTHESIS
+                                )
+                            ]))
+                        ),
+
+                        // right parenthesis
+                        hippeus_parser_generator::Parser::IsAnyOf {
+                            input: FIRST_INPUT,
+                            result: IS_ANY_OF_RESULT,
+                            candidates: vec![
+                                hippeus_parser_generator::RegisterValue::Byte(b')')
+                            ]
+                        },
+                        hippeus_parser_generator::Parser::Condition(
+                            IS_ANY_OF_RESULT,
+                            Box::new(hippeus_parser_generator::Parser::Sequence(vec![
+                                hippeus_parser_generator::Parser::Constant(
+                                    TOKEN_TAG_RIGHT_PARENTHESIS,
+                                    hippeus_parser_generator::RegisterValue::Byte(5)
+                                ),
+                                hippeus_parser_generator::Parser::WriteOutputByte(
+                                    TOKEN_TAG_RIGHT_PARENTHESIS
+                                )
+                            ]))
+                        ),
+
+                        // dot
+                        hippeus_parser_generator::Parser::IsAnyOf {
+                            input: FIRST_INPUT,
+                            result: IS_ANY_OF_RESULT,
+                            candidates: vec![
+                                hippeus_parser_generator::RegisterValue::Byte(b'.')
+                            ]
+                        },
+                        hippeus_parser_generator::Parser::Condition(
+                            IS_ANY_OF_RESULT,
+                            Box::new(hippeus_parser_generator::Parser::Sequence(vec![
+                                hippeus_parser_generator::Parser::Constant(
+                                    TOKEN_TAG_DOT,
+                                    hippeus_parser_generator::RegisterValue::Byte(6)
+                                ),
+                                hippeus_parser_generator::Parser::WriteOutputByte(
+                                    TOKEN_TAG_DOT
+                                )
+                            ]))
+                        ),
                     ])),
                 ),
             ]);
@@ -354,7 +420,7 @@ fn test_tokenize_default_syntax_newline() {
 #[test]
 fn test_tokenize_default_syntax_source_locations() {
     test_tokenize_default_syntax(
-        " \n  test=\n^",
+        " \n  test=\n^().",
         &[
             Token {
                 content: TokenContent::Whitespace,
@@ -387,6 +453,18 @@ fn test_tokenize_default_syntax_source_locations() {
             Token {
                 content: TokenContent::Caret,
                 location: SourceLocation { line: 2, column: 0 },
+            },
+            Token {
+                content: TokenContent::LeftParenthesis,
+                location: SourceLocation { line: 2, column: 1 },
+            },
+            Token {
+                content: TokenContent::RightParenthesis,
+                location: SourceLocation { line: 2, column: 2 },
+            },
+            Token {
+                content: TokenContent::Dot,
+                location: SourceLocation { line: 2, column: 3 },
             },
         ],
     );
@@ -425,13 +503,169 @@ fn test_tokenize_default_syntax_caret() {
     );
 }
 
+#[test]
+fn test_tokenize_default_syntax_left_parenthesis() {
+    test_tokenize_default_syntax(
+        "(",
+        &[Token {
+            content: TokenContent::LeftParenthesis,
+            location: SourceLocation { line: 0, column: 0 },
+        }],
+    );
+}
+
+#[test]
+fn test_tokenize_default_syntax_right_parenthesis() {
+    test_tokenize_default_syntax(
+        ")",
+        &[Token {
+            content: TokenContent::RightParenthesis,
+            location: SourceLocation { line: 0, column: 0 },
+        }],
+    );
+}
+
+#[test]
+fn test_tokenize_default_syntax_dot() {
+    test_tokenize_default_syntax(
+        ".",
+        &[Token {
+            content: TokenContent::Dot,
+            location: SourceLocation { line: 0, column: 0 },
+        }],
+    );
+}
+
+fn pop_next_non_whitespace_token<'t>(tokens: &'t mut std::slice::Iter<Token>) -> Option<&'t Token> {
+    loop {
+        let next = tokens.next();
+        match next {
+            Some(token) => match token.content {
+                TokenContent::Whitespace => continue,
+                TokenContent::Identifier(_) => return next,
+                TokenContent::Assign => return next,
+                TokenContent::Caret => return next,
+                TokenContent::LeftParenthesis => return next,
+                TokenContent::RightParenthesis => return next,
+                TokenContent::Dot => return next,
+            },
+            None => return None,
+        }
+    }
+}
+
+fn expect_dot(tokens: &mut std::slice::Iter<Token>) {
+    match pop_next_non_whitespace_token(tokens) {
+        Some(non_whitespace) => match &non_whitespace.content {
+            TokenContent::Whitespace => todo!(),
+            TokenContent::Identifier(_) => todo!(),
+            TokenContent::Assign => todo!(),
+            TokenContent::Caret => todo!(),
+            TokenContent::LeftParenthesis => todo!(),
+            TokenContent::RightParenthesis => todo!(),
+            TokenContent::Dot => {}
+        },
+        None => todo!(),
+    }
+}
+
+fn parse_expression(
+    tokens: &mut std::slice::Iter<Token>,
+    loader: &dyn LoadValue,
+    storage: &dyn StoreValue,
+) -> TypedReference {
+    match pop_next_non_whitespace_token(tokens) {
+        Some(non_whitespace) => match &non_whitespace.content {
+            TokenContent::Whitespace => todo!(),
+            TokenContent::Identifier(identifier) => storage
+                .store_value(Arc::new(Value::from_string(&identifier)))
+                .add_type(TypeId(0)),
+            TokenContent::Assign => todo!(),
+            TokenContent::Caret => todo!(),
+            TokenContent::LeftParenthesis => todo!(),
+            TokenContent::RightParenthesis => todo!(),
+            TokenContent::Dot => todo!(),
+        },
+        None => todo!(),
+    }
+}
+
+fn parse_lambda(
+    tokens: &mut std::slice::Iter<Token>,
+    loader: &dyn LoadValue,
+    storage: &dyn StoreValue,
+) -> TypedReference {
+    let parameter_name = match pop_next_non_whitespace_token(tokens) {
+        Some(non_whitespace) => match &non_whitespace.content {
+            TokenContent::Whitespace => todo!(),
+            TokenContent::Identifier(identifier) => identifier,
+            TokenContent::Assign => todo!(),
+            TokenContent::Caret => todo!(),
+            TokenContent::LeftParenthesis => todo!(),
+            TokenContent::RightParenthesis => todo!(),
+            TokenContent::Dot => todo!(),
+        },
+        None => todo!(),
+    };
+    let parameter = storage
+        .store_value(Arc::new(Value::from_string(parameter_name)))
+        .add_type(TypeId(0));
+    expect_dot(tokens);
+    let body = parse_expression(tokens, loader, storage);
+    let result = storage
+        .store_value(Arc::new(
+            crate::tree::make_lambda(crate::tree::Lambda::new(parameter, body)).value,
+        ))
+        .add_type(TypeId(7));
+    result
+}
+
+pub fn parse_entry_point_lambda(
+    tokens: &mut std::slice::Iter<Token>,
+    loader: &dyn LoadValue,
+    storage: &dyn StoreValue,
+) -> CompilerOutput {
+    let mut errors = Vec::new();
+    match pop_next_non_whitespace_token(tokens) {
+        Some(non_whitespace) => match non_whitespace.content {
+            TokenContent::Whitespace => todo!(),
+            TokenContent::Identifier(_) => todo!(),
+            TokenContent::Assign => todo!(),
+            TokenContent::Caret => {
+                let entry_point = parse_lambda(tokens, loader, storage);
+                CompilerOutput::new(entry_point, errors)
+            }
+            TokenContent::LeftParenthesis => todo!(),
+            TokenContent::RightParenthesis => todo!(),
+            TokenContent::Dot => todo!(),
+        },
+        None => {
+            errors.push(CompilerError::new(
+                "Expected entry point lambda".to_string(),
+                SourceLocation::new(0, 0),
+            ));
+            let entry_point = storage
+                .store_value(Arc::new(Value::from_unit()))
+                .add_type(TypeId(1));
+            CompilerOutput::new(entry_point, errors)
+        }
+    }
+}
+
 pub fn compile(source: &str, loader: &dyn LoadValue, storage: &dyn StoreValue) -> CompilerOutput {
-    let errors = Vec::new();
     let tokens = tokenize_default_syntax(source);
-    let entry_point = storage
-        .store_value(Arc::new(Value::from_unit()))
-        .add_type(TypeId(1));
-    CompilerOutput::new(entry_point, errors)
+    let mut token_iterator = tokens.iter();
+    let mut result = parse_entry_point_lambda(&mut token_iterator, loader, storage);
+    match pop_next_non_whitespace_token(&mut token_iterator) {
+        Some(extra_token) => {
+            result.errors.push(CompilerError::new(
+                "Unexpected token after the entry point lambda".to_string(),
+                extra_token.location,
+            ));
+        }
+        None => {}
+    }
+    result
 }
 
 #[test]
@@ -443,8 +677,29 @@ fn test_compile_empty_source() {
         value_storage
             .store_value(Arc::new(Value::from_unit()))
             .add_type(TypeId(1)),
-        Vec::new(),
+        vec![CompilerError::new(
+            "Expected entry point lambda".to_string(),
+            SourceLocation::new(0, 0),
+        )],
     );
     assert_eq!(expected, output);
     assert_eq!(1, value_storage.len());
+}
+
+#[test]
+fn test_compile_simple_program() {
+    let value_storage =
+        InMemoryValueStorage::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
+    let output = compile(r#"^x . x"#, &value_storage, &value_storage);
+    let parameter = value_storage
+        .store_value(Arc::new(Value::from_string("x")))
+        .add_type(TypeId(0));
+    let entry_point = value_storage
+        .store_value(Arc::new(
+            crate::tree::make_lambda(crate::tree::Lambda::new(parameter, parameter)).value,
+        ))
+        .add_type(TypeId(7));
+    let expected = CompilerOutput::new(entry_point, Vec::new());
+    assert_eq!(expected, output);
+    assert_eq!(2, value_storage.len());
 }
