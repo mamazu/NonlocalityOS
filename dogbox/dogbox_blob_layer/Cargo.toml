@@ -6,6 +6,7 @@ edition = "2021"
 [lib]
 
 [dependencies]
+astraea = { path ="../../astraea" }
 serde = {version = "1", features = [ "derive" ]}
 sha3 = "0"
 hex = "0"

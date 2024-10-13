@@ -1,4 +1,4 @@
-use dogbox_blob_layer::BlobDigest;
+use astraea::tree::BlobDigest;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]

@@ -1,4 +1,4 @@
-use dogbox_blob_layer::BlobDigest;
+use astraea::tree::BlobDigest;
 use essrpc::essrpc;
 use essrpc::RPCError;
 use serde::{Deserialize, Serialize};

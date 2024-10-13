@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::serialization::DirectoryTree;
 #[cfg(test)]
-use dogbox_blob_layer::BlobDigest;
+use astraea::tree::BlobDigest;
 use std::pin::Pin;
 #[cfg(test)]
 use std::sync::Arc;

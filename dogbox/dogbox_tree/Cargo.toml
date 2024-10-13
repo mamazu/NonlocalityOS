@@ -6,6 +6,7 @@ edition = "2021"
 [lib]
 
 [dependencies]
+astraea = { path ="../../astraea" }
 dogbox_blob_layer = { path ="../dogbox_blob_layer" }
 serde = "1"
 futures-core = "0"

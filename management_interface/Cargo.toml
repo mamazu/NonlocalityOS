@@ -6,6 +6,7 @@ edition = "2021"
 [lib]
 
 [dependencies]
+astraea = { path ="../astraea" }
 essrpc = {version = "0", features = [ ]}
 serde = "1"
 dogbox_blob_layer = { path ="../dogbox/dogbox_blob_layer" }

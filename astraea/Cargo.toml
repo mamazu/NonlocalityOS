@@ -6,7 +6,6 @@ edition = "2021"
 [lib]
 
 [dependencies]
-dogbox_blob_layer = { path ="../dogbox/dogbox_blob_layer" }
 hippeus_parser_generator = { path ="../hippeus_parser_generator" }
 tokio = {version = "1", features = ["rt-multi-thread", "macros", "time", "sync"]}
 tokio-stream = "0"

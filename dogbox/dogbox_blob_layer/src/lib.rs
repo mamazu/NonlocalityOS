@@ -1,41 +1,6 @@
 #![feature(array_chunks)]
+use astraea::tree::BlobDigest;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_512};
-
-/// SHA3-512 hash. Supports Serde because we will need this type a lot in network protocols and file formats.
-#[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy, Hash)]
-pub struct BlobDigest(
-    /// data is split into two parts because Serde doesn't support 64-element arrays
-    pub ([u8; 32], [u8; 32]),
-);
-
-impl BlobDigest {
-    pub fn new(value: &[u8; 64]) -> BlobDigest {
-        let (first, second) = value.split_at(32);
-        BlobDigest((first.try_into().unwrap(), second.try_into().unwrap()))
-    }
-
-    pub fn hash(input: &[u8]) -> BlobDigest {
-        let mut hasher = Sha3_512::new();
-        hasher.update(input);
-        let result = hasher.finalize();
-        let slice: &[u8] = result.as_slice();
-        let mut chunks: std::slice::ArrayChunks<u8, 64> = slice.array_chunks();
-        let chunk = chunks.next().unwrap();
-        assert!(chunks.remainder().is_empty());
-        BlobDigest::new(chunk)
-    }
-}
-
-impl std::convert::From<BlobDigest> for [u8; 64] {
-    fn from(val: BlobDigest) -> Self {
-        let mut result = [0u8; 64];
-        result[..32].copy_from_slice(&val.0 .0);
-        result[32..].copy_from_slice(&val.0 .1);
-        result
-    }
-}
 
 #[test]
 fn test_calculate_digest_empty() {
