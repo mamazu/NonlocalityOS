@@ -648,13 +648,13 @@ pub fn to_lambda(value: Value) -> Option<Lambda> {
     Some(Lambda::new(value.references[0], value.references[1]))
 }
 
-struct LambdaApplication {
+pub struct LambdaApplication {
     function: TypedReference,
     argument: TypedReference,
 }
 
 impl LambdaApplication {
-    fn new(function: TypedReference, argument: TypedReference) -> Self {
+    pub fn new(function: TypedReference, argument: TypedReference) -> Self {
         Self {
             function: function,
             argument: argument,
@@ -865,42 +865,20 @@ impl CompilerOutput {
     }
 }
 
-struct Compiled {
-    pub source: TypedReference,
-}
-
-impl Compiled {
-    pub fn new(source: TypedReference) -> Compiled {
-        Compiled { source: source }
-    }
-
-    pub fn from_value(input: Value) -> Option<Compiled> {
-        if input.references.len() != 1 {
-            return None;
-        }
-        Some(Compiled::new(input.references[0]))
-    }
-
-    pub fn to_value(self) -> Value {
-        Value::new(Vec::new(), vec![self.source])
-    }
-}
-
 pub struct CompiledReducer {}
 
 impl ReduceExpression for CompiledReducer {
     fn reduce<'t>(
         &'t self,
         argument: TypedValue,
-        service_resolver: &'t dyn ResolveServiceId,
+        _service_resolver: &'t dyn ResolveServiceId,
         loader: &'t dyn LoadValue,
         storage: &'t dyn StoreValue,
     ) -> Pin<Box<dyn std::future::Future<Output = TypedValue> + 't>> {
         let source_ref = argument.value.references[0];
         let source_value = loader.load_value(&source_ref.reference).unwrap();
         let source_string = source_value.to_string().unwrap();
-        let compiler_output: CompilerOutput =
-            crate::compiler::compile(&source_string, loader, storage);
+        let compiler_output: CompilerOutput = crate::compiler::compile(&source_string, storage);
         Box::pin(std::future::ready(TypedValue::new(
             TypeId(10),
             compiler_output.to_value(),

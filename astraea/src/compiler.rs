@@ -1,6 +1,5 @@
 use crate::tree::{
-    CompilerError, CompilerOutput, InMemoryValueStorage, LoadValue, SourceLocation, StoreValue,
-    TypeId, TypedReference, Value,
+    CompilerError, CompilerOutput, SourceLocation, StoreValue, TypeId, TypedReference, Value,
 };
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -385,155 +384,160 @@ fn tokenize_default_syntax(source: &str) -> Vec<Token> {
     tokenize(source, &TOKEN_PARSER)
 }
 
-fn test_tokenize_default_syntax(source: &str, expected_tokens: &[Token]) {
-    let tokenized = tokenize_default_syntax(source);
-    assert_eq!(&expected_tokens[..], &tokenized[..]);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn test_tokenize_default_syntax_empty_source() {
-    test_tokenize_default_syntax("", &[]);
-}
+    fn test_tokenize_default_syntax(source: &str, expected_tokens: &[Token]) {
+        let tokenized = tokenize_default_syntax(source);
+        assert_eq!(&expected_tokens[..], &tokenized[..]);
+    }
 
-#[test]
-fn test_tokenize_default_syntax_space() {
-    test_tokenize_default_syntax(
-        " ",
-        &[Token {
-            content: TokenContent::Whitespace,
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
-}
+    #[test]
+    fn test_tokenize_default_syntax_empty_source() {
+        test_tokenize_default_syntax("", &[]);
+    }
 
-#[test]
-fn test_tokenize_default_syntax_newline() {
-    test_tokenize_default_syntax(
-        "\n",
-        &[Token {
-            content: TokenContent::Whitespace,
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
-}
-
-#[test]
-fn test_tokenize_default_syntax_source_locations() {
-    test_tokenize_default_syntax(
-        " \n  test=\n^().",
-        &[
-            Token {
+    #[test]
+    fn test_tokenize_default_syntax_space() {
+        test_tokenize_default_syntax(
+            " ",
+            &[Token {
                 content: TokenContent::Whitespace,
                 location: SourceLocation { line: 0, column: 0 },
-            },
-            Token {
+            }],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_newline() {
+        test_tokenize_default_syntax(
+            "\n",
+            &[Token {
                 content: TokenContent::Whitespace,
-                location: SourceLocation { line: 0, column: 1 },
-            },
-            Token {
-                content: TokenContent::Whitespace,
-                location: SourceLocation { line: 1, column: 0 },
-            },
-            Token {
-                content: TokenContent::Whitespace,
-                location: SourceLocation { line: 1, column: 1 },
-            },
-            Token {
+                location: SourceLocation { line: 0, column: 0 },
+            }],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_source_locations() {
+        test_tokenize_default_syntax(
+            " \n  test=\n^().",
+            &[
+                Token {
+                    content: TokenContent::Whitespace,
+                    location: SourceLocation { line: 0, column: 0 },
+                },
+                Token {
+                    content: TokenContent::Whitespace,
+                    location: SourceLocation { line: 0, column: 1 },
+                },
+                Token {
+                    content: TokenContent::Whitespace,
+                    location: SourceLocation { line: 1, column: 0 },
+                },
+                Token {
+                    content: TokenContent::Whitespace,
+                    location: SourceLocation { line: 1, column: 1 },
+                },
+                Token {
+                    content: TokenContent::Identifier("test".to_string()),
+                    location: SourceLocation { line: 1, column: 2 },
+                },
+                Token {
+                    content: TokenContent::Assign,
+                    location: SourceLocation { line: 1, column: 6 },
+                },
+                Token {
+                    content: TokenContent::Whitespace,
+                    location: SourceLocation { line: 1, column: 7 },
+                },
+                Token {
+                    content: TokenContent::Caret,
+                    location: SourceLocation { line: 2, column: 0 },
+                },
+                Token {
+                    content: TokenContent::LeftParenthesis,
+                    location: SourceLocation { line: 2, column: 1 },
+                },
+                Token {
+                    content: TokenContent::RightParenthesis,
+                    location: SourceLocation { line: 2, column: 2 },
+                },
+                Token {
+                    content: TokenContent::Dot,
+                    location: SourceLocation { line: 2, column: 3 },
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_identifier() {
+        test_tokenize_default_syntax(
+            "test",
+            &[Token {
                 content: TokenContent::Identifier("test".to_string()),
-                location: SourceLocation { line: 1, column: 2 },
-            },
-            Token {
+                location: SourceLocation { line: 0, column: 0 },
+            }],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_assign() {
+        test_tokenize_default_syntax(
+            "=",
+            &[Token {
                 content: TokenContent::Assign,
-                location: SourceLocation { line: 1, column: 6 },
-            },
-            Token {
-                content: TokenContent::Whitespace,
-                location: SourceLocation { line: 1, column: 7 },
-            },
-            Token {
+                location: SourceLocation { line: 0, column: 0 },
+            }],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_caret() {
+        test_tokenize_default_syntax(
+            "^",
+            &[Token {
                 content: TokenContent::Caret,
-                location: SourceLocation { line: 2, column: 0 },
-            },
-            Token {
+                location: SourceLocation { line: 0, column: 0 },
+            }],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_left_parenthesis() {
+        test_tokenize_default_syntax(
+            "(",
+            &[Token {
                 content: TokenContent::LeftParenthesis,
-                location: SourceLocation { line: 2, column: 1 },
-            },
-            Token {
+                location: SourceLocation { line: 0, column: 0 },
+            }],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_right_parenthesis() {
+        test_tokenize_default_syntax(
+            ")",
+            &[Token {
                 content: TokenContent::RightParenthesis,
-                location: SourceLocation { line: 2, column: 2 },
-            },
-            Token {
+                location: SourceLocation { line: 0, column: 0 },
+            }],
+        );
+    }
+
+    #[test]
+    fn test_tokenize_default_syntax_dot() {
+        test_tokenize_default_syntax(
+            ".",
+            &[Token {
                 content: TokenContent::Dot,
-                location: SourceLocation { line: 2, column: 3 },
-            },
-        ],
-    );
-}
-
-#[test]
-fn test_tokenize_default_syntax_identifier() {
-    test_tokenize_default_syntax(
-        "test",
-        &[Token {
-            content: TokenContent::Identifier("test".to_string()),
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
-}
-
-#[test]
-fn test_tokenize_default_syntax_assign() {
-    test_tokenize_default_syntax(
-        "=",
-        &[Token {
-            content: TokenContent::Assign,
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
-}
-
-#[test]
-fn test_tokenize_default_syntax_caret() {
-    test_tokenize_default_syntax(
-        "^",
-        &[Token {
-            content: TokenContent::Caret,
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
-}
-
-#[test]
-fn test_tokenize_default_syntax_left_parenthesis() {
-    test_tokenize_default_syntax(
-        "(",
-        &[Token {
-            content: TokenContent::LeftParenthesis,
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
-}
-
-#[test]
-fn test_tokenize_default_syntax_right_parenthesis() {
-    test_tokenize_default_syntax(
-        ")",
-        &[Token {
-            content: TokenContent::RightParenthesis,
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
-}
-
-#[test]
-fn test_tokenize_default_syntax_dot() {
-    test_tokenize_default_syntax(
-        ".",
-        &[Token {
-            content: TokenContent::Dot,
-            location: SourceLocation { line: 0, column: 0 },
-        }],
-    );
+                location: SourceLocation { line: 0, column: 0 },
+            }],
+        );
+    }
 }
 
 fn pop_next_non_whitespace_token<'t>(tokens: &'t mut std::slice::Iter<Token>) -> Option<&'t Token> {
@@ -571,7 +575,6 @@ fn expect_dot(tokens: &mut std::slice::Iter<Token>) {
 
 fn parse_expression(
     tokens: &mut std::slice::Iter<Token>,
-    loader: &dyn LoadValue,
     storage: &dyn StoreValue,
 ) -> TypedReference {
     match pop_next_non_whitespace_token(tokens) {
@@ -590,11 +593,7 @@ fn parse_expression(
     }
 }
 
-fn parse_lambda(
-    tokens: &mut std::slice::Iter<Token>,
-    loader: &dyn LoadValue,
-    storage: &dyn StoreValue,
-) -> TypedReference {
+fn parse_lambda(tokens: &mut std::slice::Iter<Token>, storage: &dyn StoreValue) -> TypedReference {
     let parameter_name = match pop_next_non_whitespace_token(tokens) {
         Some(non_whitespace) => match &non_whitespace.content {
             TokenContent::Whitespace => todo!(),
@@ -611,7 +610,7 @@ fn parse_lambda(
         .store_value(Arc::new(Value::from_string(parameter_name)))
         .add_type(TypeId(0));
     expect_dot(tokens);
-    let body = parse_expression(tokens, loader, storage);
+    let body = parse_expression(tokens, storage);
     let result = storage
         .store_value(Arc::new(
             crate::tree::make_lambda(crate::tree::Lambda::new(parameter, body)).value,
@@ -622,7 +621,6 @@ fn parse_lambda(
 
 pub fn parse_entry_point_lambda(
     tokens: &mut std::slice::Iter<Token>,
-    loader: &dyn LoadValue,
     storage: &dyn StoreValue,
 ) -> CompilerOutput {
     let mut errors = Vec::new();
@@ -632,7 +630,7 @@ pub fn parse_entry_point_lambda(
             TokenContent::Identifier(_) => todo!(),
             TokenContent::Assign => todo!(),
             TokenContent::Caret => {
-                let entry_point = parse_lambda(tokens, loader, storage);
+                let entry_point = parse_lambda(tokens, storage);
                 CompilerOutput::new(entry_point, errors)
             }
             TokenContent::LeftParenthesis => todo!(),
@@ -652,10 +650,10 @@ pub fn parse_entry_point_lambda(
     }
 }
 
-pub fn compile(source: &str, loader: &dyn LoadValue, storage: &dyn StoreValue) -> CompilerOutput {
+pub fn compile(source: &str, storage: &dyn StoreValue) -> CompilerOutput {
     let tokens = tokenize_default_syntax(source);
     let mut token_iterator = tokens.iter();
-    let mut result = parse_entry_point_lambda(&mut token_iterator, loader, storage);
+    let mut result = parse_entry_point_lambda(&mut token_iterator, storage);
     match pop_next_non_whitespace_token(&mut token_iterator) {
         Some(extra_token) => {
             result.errors.push(CompilerError::new(
@@ -668,38 +666,44 @@ pub fn compile(source: &str, loader: &dyn LoadValue, storage: &dyn StoreValue) -
     result
 }
 
-#[test]
-fn test_compile_empty_source() {
-    let value_storage =
-        InMemoryValueStorage::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
-    let output = compile("", &value_storage, &value_storage);
-    let expected = CompilerOutput::new(
-        value_storage
-            .store_value(Arc::new(Value::from_unit()))
-            .add_type(TypeId(1)),
-        vec![CompilerError::new(
-            "Expected entry point lambda".to_string(),
-            SourceLocation::new(0, 0),
-        )],
-    );
-    assert_eq!(expected, output);
-    assert_eq!(1, value_storage.len());
-}
+#[cfg(test)]
+mod tests2 {
+    use super::*;
+    use crate::tree::InMemoryValueStorage;
 
-#[test]
-fn test_compile_simple_program() {
-    let value_storage =
-        InMemoryValueStorage::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
-    let output = compile(r#"^x . x"#, &value_storage, &value_storage);
-    let parameter = value_storage
-        .store_value(Arc::new(Value::from_string("x")))
-        .add_type(TypeId(0));
-    let entry_point = value_storage
-        .store_value(Arc::new(
-            crate::tree::make_lambda(crate::tree::Lambda::new(parameter, parameter)).value,
-        ))
-        .add_type(TypeId(7));
-    let expected = CompilerOutput::new(entry_point, Vec::new());
-    assert_eq!(expected, output);
-    assert_eq!(2, value_storage.len());
+    #[test]
+    fn test_compile_empty_source() {
+        let value_storage =
+            InMemoryValueStorage::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
+        let output = compile("", &value_storage);
+        let expected = CompilerOutput::new(
+            value_storage
+                .store_value(Arc::new(Value::from_unit()))
+                .add_type(TypeId(1)),
+            vec![CompilerError::new(
+                "Expected entry point lambda".to_string(),
+                SourceLocation::new(0, 0),
+            )],
+        );
+        assert_eq!(expected, output);
+        assert_eq!(1, value_storage.len());
+    }
+
+    #[test]
+    fn test_compile_simple_program() {
+        let value_storage =
+            InMemoryValueStorage::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
+        let output = compile(r#"^x . x"#, &value_storage);
+        let parameter = value_storage
+            .store_value(Arc::new(Value::from_string("x")))
+            .add_type(TypeId(0));
+        let entry_point = value_storage
+            .store_value(Arc::new(
+                crate::tree::make_lambda(crate::tree::Lambda::new(parameter, parameter)).value,
+            ))
+            .add_type(TypeId(7));
+        let expected = CompilerOutput::new(entry_point, Vec::new());
+        assert_eq!(expected, output);
+        assert_eq!(2, value_storage.len());
+    }
 }

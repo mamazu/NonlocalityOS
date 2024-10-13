@@ -186,7 +186,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         path: &'a dav_server::davpath::DavPath,
         options: dav_server::fs::OpenOptions,
-    ) -> dav_server::fs::FsFuture<Box<dyn dav_server::fs::DavFile>> {
+    ) -> dav_server::fs::FsFuture<'a, Box<dyn dav_server::fs::DavFile>> {
         info!("Open {} | {:?}", path, options);
         Box::pin(async move {
             let converted_path = convert_path(&path)?;
@@ -209,7 +209,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         path: &'a dav_server::davpath::DavPath,
         _meta: dav_server::fs::ReadDirMeta,
-    ) -> dav_server::fs::FsFuture<dav_server::fs::FsStream<Box<dyn dav_server::fs::DavDirEntry>>>
+    ) -> dav_server::fs::FsFuture<'a, dav_server::fs::FsStream<Box<dyn dav_server::fs::DavDirEntry>>>
     {
         info!("Read dir {}", path);
         Box::pin(async move {
@@ -250,7 +250,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
     fn metadata<'a>(
         &'a self,
         path: &'a dav_server::davpath::DavPath,
-    ) -> dav_server::fs::FsFuture<Box<dyn dav_server::fs::DavMetaData>> {
+    ) -> dav_server::fs::FsFuture<'a, Box<dyn dav_server::fs::DavMetaData>> {
         info!("Metadata {}", path);
         Box::pin(async move {
             let converted_path = convert_path(&path)?;
@@ -282,14 +282,14 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
     fn symlink_metadata<'a>(
         &'a self,
         path: &'a dav_server::davpath::DavPath,
-    ) -> dav_server::fs::FsFuture<Box<dyn dav_server::fs::DavMetaData>> {
+    ) -> dav_server::fs::FsFuture<'a, Box<dyn dav_server::fs::DavMetaData>> {
         self.metadata(path)
     }
 
     fn create_dir<'a>(
         &'a self,
         path: &'a dav_server::davpath::DavPath,
-    ) -> dav_server::fs::FsFuture<()> {
+    ) -> dav_server::fs::FsFuture<'a, ()> {
         info!("Create directory {}", path);
         Box::pin(async move {
             let converted_path = convert_path(&path)?;
@@ -320,14 +320,14 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
     fn remove_dir<'a>(
         &'a self,
         _path: &'a dav_server::davpath::DavPath,
-    ) -> dav_server::fs::FsFuture<()> {
+    ) -> dav_server::fs::FsFuture<'a, ()> {
         todo!()
     }
 
     fn remove_file<'a>(
         &'a self,
         _path: &'a dav_server::davpath::DavPath,
-    ) -> dav_server::fs::FsFuture<()> {
+    ) -> dav_server::fs::FsFuture<'a, ()> {
         todo!()
     }
 
@@ -335,7 +335,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         _from: &'a dav_server::davpath::DavPath,
         _to: &'a dav_server::davpath::DavPath,
-    ) -> dav_server::fs::FsFuture<()> {
+    ) -> dav_server::fs::FsFuture<'a, ()> {
         todo!()
     }
 
@@ -343,7 +343,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         _from: &'a dav_server::davpath::DavPath,
         _to: &'a dav_server::davpath::DavPath,
-    ) -> dav_server::fs::FsFuture<()> {
+    ) -> dav_server::fs::FsFuture<'a, ()> {
         todo!()
     }
 
@@ -358,7 +358,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         _path: &'a dav_server::davpath::DavPath,
         _patch: Vec<(bool, dav_server::fs::DavProp)>,
-    ) -> dav_server::fs::FsFuture<Vec<(hyper::StatusCode, dav_server::fs::DavProp)>> {
+    ) -> dav_server::fs::FsFuture<'a, Vec<(hyper::StatusCode, dav_server::fs::DavProp)>> {
         todo!()
     }
 
@@ -366,7 +366,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         _path: &'a dav_server::davpath::DavPath,
         _do_content: bool,
-    ) -> dav_server::fs::FsFuture<Vec<dav_server::fs::DavProp>> {
+    ) -> dav_server::fs::FsFuture<'a, Vec<dav_server::fs::DavProp>> {
         todo!()
     }
 
@@ -374,7 +374,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         _path: &'a dav_server::davpath::DavPath,
         _prop: dav_server::fs::DavProp,
-    ) -> dav_server::fs::FsFuture<Vec<u8>> {
+    ) -> dav_server::fs::FsFuture<'a, Vec<u8>> {
         todo!()
     }
 

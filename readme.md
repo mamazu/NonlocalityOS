@@ -16,6 +16,11 @@
 * run `./test.sh`
 * on success it will print `Success!` in the end
 
+# Watch code and keep running tests
+
+* `cargo install --locked bacon`
+* `bacon nextest`
+
 # Formatting code
 
 ## Linux

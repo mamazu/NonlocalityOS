@@ -1,8 +1,5 @@
 #![feature(map_try_insert)]
-use std::{
-    collections::{BTreeMap, VecDeque},
-    io::Read,
-};
+use std::collections::{BTreeMap, VecDeque};
 
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone)]
 pub struct RegisterId(pub u16);
