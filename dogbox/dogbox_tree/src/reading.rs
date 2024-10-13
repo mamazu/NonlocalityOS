@@ -50,5 +50,5 @@ pub type Stream<'t, T> = Pin<Box<dyn futures_core::stream::Stream<Item = T> + Se
 #[async_trait]
 pub trait ReadDirectory {
     async fn enumerate<'t>(&'t self) -> Result<Stream<'t, DirectoryEntry>>;
-    async fn access_entry(&self, name: &FileName) -> Result<Option<EntryAccessor>>;
+    //async fn access_entry(&self, name: &FileName) -> Result<Option<EntryAccessor>>;
 }

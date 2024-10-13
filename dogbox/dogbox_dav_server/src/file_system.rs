@@ -82,7 +82,7 @@ impl dav_server::fs::DavMetaData for DogBoxFileMetaData {
 }
 
 struct DogBoxDirEntry {
-    info: dogbox_tree_editor::DirectoryEntry,
+    info: dogbox_tree_editor::MutableDirectoryEntry,
 }
 
 impl dav_server::fs::DavDirEntry for DogBoxDirEntry {

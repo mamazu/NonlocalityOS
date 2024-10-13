@@ -2,15 +2,11 @@
 use crate::serialization::DirectoryTree;
 #[cfg(test)]
 use astraea::tree::BlobDigest;
+#[cfg(test)]
+use astraea::tree::LoadValue;
 use std::pin::Pin;
 #[cfg(test)]
 use std::sync::Arc;
-
-#[cfg(test)]
-struct BlobReadFile {
-    digest: BlobDigest,
-    read_blob: Arc<dyn dogbox_blob_layer::ReadBlob>,
-}
 
 struct BlobOpenFile {
     content: Vec<u8>,
@@ -51,31 +47,19 @@ impl tokio::io::AsyncSeek for BlobOpenFile {
 mod tests {
     use super::*;
     use crate::{
-        reading::{EntryAccessor, ReadDirectory, Stream},
+        reading::{ReadDirectory, Stream},
         serialization::FileName,
     };
+    use astraea::tree::{Reference, ReferenceIndex};
     use async_stream::stream;
     use async_trait::async_trait;
     use std::collections::BTreeMap;
     use tokio::sync::Mutex;
 
-    #[async_trait]
-    impl crate::reading::ReadFile for BlobReadFile {
-        async fn open(&self) -> crate::reading::Result<Box<dyn crate::reading::AsyncReadBlob>> {
-            match self.read_blob.read_blob(&self.digest).await {
-                Some(success) => Ok(Box::new(BlobOpenFile {
-                    content: success,
-                    cursor: 0,
-                })),
-                None => Err(crate::reading::Error::DataUnavailable),
-            }
-        }
-    }
-
-    struct BlobReadDirectory {
+    struct BlobReadDirectory<'t> {
         digest: BlobDigest,
         tree: tokio::sync::Mutex<Option<Arc<DirectoryTree>>>,
-        read_blob: Arc<dyn dogbox_blob_layer::ReadBlob>,
+        read_blob: &'t (dyn LoadValue + Sync),
     }
 
     fn parse_directory_blob(data: &[u8]) -> Option<DirectoryTree> {
@@ -85,13 +69,13 @@ mod tests {
         }
     }
 
-    impl BlobReadDirectory {
+    impl<'t> BlobReadDirectory<'t> {
         async fn require_tree(&self) -> crate::reading::Result<Arc<DirectoryTree>> {
             let mut tree_locked = self.tree.lock().await;
             match tree_locked.as_ref() {
                 Some(exists) => Ok(exists.clone()),
-                None => match self.read_blob.read_blob(&self.digest).await {
-                    Some(blob_content) => match parse_directory_blob(&blob_content) {
+                None => match self.read_blob.load_value(&Reference::new(self.digest)) {
+                    Some(blob_content) => match parse_directory_blob(&blob_content.serialized) {
                         Some(parsed) => {
                             let result = Arc::new(parsed);
                             *tree_locked = Some(result.clone());
@@ -119,7 +103,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ReadDirectory for BlobReadDirectory {
+    impl<'a> ReadDirectory for BlobReadDirectory<'a> {
         async fn enumerate<'t>(
             &'t self,
         ) -> crate::reading::Result<Stream<'t, crate::reading::DirectoryEntry>> {
@@ -130,38 +114,12 @@ mod tests {
                 }
             }))
         }
-
-        async fn access_entry(
-            &self,
-            name: &FileName,
-        ) -> crate::reading::Result<Option<EntryAccessor>> {
-            let tree = self.require_tree().await?;
-            match tree.children.get(name) {
-                Some(found) => match found.kind {
-                    crate::serialization::DirectoryEntryKind::Directory => Ok(Some(
-                        EntryAccessor::Directory(Box::new(BlobReadDirectory {
-                            digest: found.digest,
-                            tree: Mutex::new(None),
-                            read_blob: self.read_blob.clone(),
-                        })),
-                    )),
-                    crate::serialization::DirectoryEntryKind::File(_) => {
-                        Ok(Some(EntryAccessor::File(Box::new(BlobReadFile {
-                            digest: found.digest,
-                            read_blob: self.read_blob.clone(),
-                        }))))
-                    }
-                },
-                None => Ok(None),
-            }
-        }
     }
 
     pub struct DoNotUse {}
 
-    #[async_trait]
-    impl dogbox_blob_layer::ReadBlob for DoNotUse {
-        async fn read_blob(&self, _digest: &BlobDigest) -> Option<Vec<u8>> {
+    impl LoadValue for DoNotUse {
+        fn load_value(&self, _reference: &Reference) -> Option<Arc<astraea::tree::Value>> {
             panic!()
         }
     }
@@ -172,7 +130,7 @@ mod tests {
         let directory = BlobReadDirectory {
             digest: BlobDigest::hash(&[]),
             tree: Mutex::new(Some(Arc::new(DirectoryTree::new(BTreeMap::new())))),
-            read_blob: Arc::new(DoNotUse {}),
+            read_blob: &DoNotUse {},
         };
         let mut entries = directory.enumerate().await.unwrap();
         let entry = futures_util::StreamExt::next(&mut entries).await;
@@ -191,18 +149,18 @@ mod tests {
                     dir_name.clone(),
                     crate::serialization::DirectoryEntry::new(
                         crate::serialization::DirectoryEntryKind::Directory,
-                        BlobDigest::hash(&[]),
+                        ReferenceIndex(0),
                     ),
                 ),
                 (
                     file_name.clone(),
                     crate::serialization::DirectoryEntry::new(
                         crate::serialization::DirectoryEntryKind::File(file_size),
-                        BlobDigest::hash(&[]),
+                        ReferenceIndex(1),
                     ),
                 ),
             ]))))),
-            read_blob: Arc::new(DoNotUse {}),
+            read_blob: &DoNotUse {},
         };
         let mut entries = directory.enumerate().await.unwrap();
         assert_eq!(
@@ -220,61 +178,5 @@ mod tests {
             futures_util::StreamExt::next(&mut entries).await.unwrap()
         );
         assert!(futures_util::StreamExt::next(&mut entries).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_blob_read_directory_access_entry_that_doesnt_exist() {
-        let directory = BlobReadDirectory {
-            digest: BlobDigest::hash(&[]),
-            tree: Mutex::new(Some(Arc::new(DirectoryTree::new(BTreeMap::new())))),
-            read_blob: Arc::new(DoNotUse {}),
-        };
-        let nothing = directory
-            .access_entry(&FileName::try_from("does not exist").unwrap())
-            .await
-            .unwrap();
-        assert!(nothing.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_blob_read_directory_access_entry_file() {
-        let mut blob_store = dogbox_blob_layer::MemoryBlobStore::new();
-        let file_content = "hello".as_bytes();
-        use dogbox_blob_layer::WriteBlob;
-        let file_digest = blob_store.write_blob(file_content).await;
-        assert_eq!(BlobDigest::hash(file_content), file_digest);
-        let file_name = FileName::try_from("file.txt".to_string()).unwrap();
-        let file_size = file_content.len();
-
-        let tree = DirectoryTree::new(BTreeMap::from([(
-            file_name.clone(),
-            crate::serialization::DirectoryEntry::new(
-                crate::serialization::DirectoryEntryKind::File(file_size as u64),
-                file_digest,
-            ),
-        )]));
-
-        use postcard::to_allocvec;
-        let dir_digest = blob_store.write_blob(&to_allocvec(&tree).unwrap()).await;
-
-        let directory = BlobReadDirectory {
-            digest: dir_digest,
-            tree: Mutex::new(None),
-            read_blob: Arc::new(blob_store),
-        };
-        let accessor = directory.access_entry(&file_name).await.unwrap().unwrap();
-        match accessor {
-            EntryAccessor::Directory(_) => panic!(),
-            EntryAccessor::File(read_file) => {
-                let mut opened = read_file.open().await.unwrap();
-                let mut buffer = Vec::new();
-                assert_eq!(
-                    file_size,
-                    tokio::io::AsyncReadExt::read_to_end(&mut opened, &mut buffer)
-                        .await
-                        .unwrap()
-                );
-            }
-        }
     }
 }

@@ -18,8 +18,7 @@
 
 # Watch code and keep running tests
 
-* `cargo install --locked bacon`
-* `bacon nextest`
+* `./watch_cargo_tests.sh`
 
 # Formatting code
 

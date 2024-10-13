@@ -856,26 +856,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa333c37992bc9a2ca345cac27e7f150e97740a92daaeb488c98292d83329803"
 
 [[package]]
-name = "dogbox_blob_layer"
-version = "0.1.0"
-dependencies = [
- "astraea",
- "async-trait",
- "hex",
- "serde",
- "sha3",
- "tokio",
- "tokio-macros",
-]
-
-[[package]]
 name = "dogbox_dav_server"
 version = "0.1.0"
 dependencies = [
+ "astraea",
  "async-stream",
  "bytes 1.7.1",
  "dav-server",
- "dogbox_blob_layer",
  "dogbox_tree_editor",
  "futures",
  "hyper 1.4.1",
@@ -895,7 +882,6 @@ dependencies = [
  "astraea",
  "async-stream",
  "async-trait",
- "dogbox_blob_layer",
  "futures-core",
  "futures-util",
  "postcard",
@@ -908,11 +894,13 @@ dependencies = [
 name = "dogbox_tree_editor"
 version = "0.1.0"
 dependencies = [
+ "astraea",
  "async-stream",
  "bytes 1.7.1",
  "dogbox_tree",
  "futures",
  "futures-core",
+ "postcard",
  "relative-path",
  "tokio",
 ]
@@ -1849,7 +1837,6 @@ name = "management_interface"
 version = "0.1.0"
 dependencies = [
  "astraea",
- "dogbox_blob_layer",
  "essrpc",
  "serde",
 ]

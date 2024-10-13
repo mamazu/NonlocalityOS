@@ -9,7 +9,6 @@ members=[
     "nonlocality_host",
     "hippeus_parser_generator",
     "totp_example",
-    "dogbox/dogbox_blob_layer",
     "dogbox/dogbox_tree",
     "dogbox/dogbox_tree_editor",
     "dogbox/dogbox_dav_server",
