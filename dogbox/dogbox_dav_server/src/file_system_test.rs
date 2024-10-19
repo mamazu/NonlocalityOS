@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::file_system::DogBoxFileSystem;
-    use astraea::tree::InMemoryValueStorage;
+    use astraea::storage::InMemoryValueStorage;
     use dav_server::{fakels::FakeLs, DavHandler};
     use dogbox_tree_editor::OpenDirectory;
     use hyper::{body, server::conn::http1, Request};

@@ -1,9 +1,9 @@
 #[cfg(test)]
 use crate::serialization::DirectoryTree;
 #[cfg(test)]
-use astraea::tree::BlobDigest;
+use astraea::storage::LoadValue;
 #[cfg(test)]
-use astraea::tree::LoadValue;
+use astraea::tree::BlobDigest;
 use std::pin::Pin;
 #[cfg(test)]
 use std::sync::Arc;

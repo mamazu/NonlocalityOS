@@ -1,4 +1,4 @@
-use astraea::tree::{BlobDigest, InMemoryValueStorage};
+use astraea::{storage::InMemoryValueStorage, tree::BlobDigest};
 use dav_server::{fakels::FakeLs, DavHandler};
 use dogbox_tree_editor::{DirectoryEntry, DirectoryEntryKind, OpenDirectory};
 use hyper::{body, server::conn::http1, Request};

@@ -5,8 +5,10 @@ use std::{
     collections::BTreeMap,
     io::{self, Write},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+
+use crate::storage::{LoadValue, StoreValue};
 
 /// SHA3-512 hash. Supports Serde because we will need this type a lot in network protocols and file formats.
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy, Hash)]
@@ -289,71 +291,14 @@ pub fn calculate_reference(referenced: &Value) -> Reference {
     }
 }
 
-pub trait StoreValue {
-    fn store_value(&self, value: Arc<Value>) -> Reference;
-}
-
-pub trait LoadValue {
-    fn load_value(&self, reference: &Reference) -> Option<Arc<Value>>;
-}
-
-pub trait LoadStoreValue: LoadValue + StoreValue {}
-
-impl std::fmt::Debug for dyn LoadStoreValue + Send + Sync {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LoadStoreValue")
-    }
-}
-
-pub struct InMemoryValueStorage {
-    reference_to_value: Mutex<BTreeMap<Reference, Arc<Value>>>,
-}
-
-impl InMemoryValueStorage {
-    pub fn new(reference_to_value: Mutex<BTreeMap<Reference, Arc<Value>>>) -> InMemoryValueStorage {
-        InMemoryValueStorage { reference_to_value }
-    }
-
-    pub fn empty() -> InMemoryValueStorage {
-        Self {
-            reference_to_value: Mutex::new(BTreeMap::new()),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.reference_to_value.lock().unwrap().len()
-    }
-}
-
-impl StoreValue for InMemoryValueStorage {
-    fn store_value(&self, value: Arc<Value>) -> Reference {
-        let mut lock = self.reference_to_value.lock().unwrap();
-        let reference = calculate_reference(&value);
-        if !lock.contains_key(&reference) {
-            lock.insert(reference.clone(), value);
-        }
-        reference
-    }
-}
-
-impl LoadValue for InMemoryValueStorage {
-    fn load_value(&self, reference: &Reference) -> Option<Arc<Value>> {
-        let lock = self.reference_to_value.lock().unwrap();
-        lock.get(reference).cloned()
-    }
-}
-
-impl LoadStoreValue for InMemoryValueStorage {}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reduce_expression() {
     let identity: Arc<dyn ReduceExpression> = Arc::new(Identity {});
     let services = ServiceRegistry {
         services: BTreeMap::from([(TypeId(0), identity.clone()), (TypeId(1), identity)]),
     };
-    let value_storage = InMemoryValueStorage {
-        reference_to_value: Mutex::new(BTreeMap::new()),
-    };
+    let value_storage =
+        crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let result = reduce_expression_without_storing_the_final_result(
         TypedValue::new(TypeId(0), Value::from_string("hello, world!\n")),
         &services,
@@ -410,9 +355,8 @@ async fn test_effect() {
         ]),
     };
 
-    let value_storage = InMemoryValueStorage {
-        reference_to_value: Mutex::new(BTreeMap::new()),
-    };
+    let value_storage =
+        crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let past = value_storage
         .store_value(Arc::new(make_beginning_of_time()))
         .add_type(TypeId(3));
@@ -500,9 +444,8 @@ async fn test_sum() {
     let services = ServiceRegistry {
         services: BTreeMap::from([(TypeId(5), identity), (TypeId(6), sum_service)]),
     };
-    let value_storage = InMemoryValueStorage {
-        reference_to_value: Mutex::new(BTreeMap::new()),
-    };
+    let value_storage =
+        crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let a = value_storage
         .store_value(Arc::new(make_seconds(1).value))
         .add_type(TypeId(5));
@@ -525,9 +468,8 @@ async fn test_nested_sum() {
     let services = ServiceRegistry {
         services: BTreeMap::from([(TypeId(5), identity), (TypeId(6), sum_service)]),
     };
-    let value_storage = InMemoryValueStorage {
-        reference_to_value: Mutex::new(BTreeMap::new()),
-    };
+    let value_storage =
+        crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let a = value_storage
         .store_value(Arc::new(make_seconds(1).value))
         .add_type(TypeId(5));
@@ -604,9 +546,8 @@ async fn test_delay() {
         ]),
     };
 
-    let value_storage = InMemoryValueStorage {
-        reference_to_value: Mutex::new(BTreeMap::new()),
-    };
+    let value_storage =
+        crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let past = value_storage
         .store_value(Arc::new(make_beginning_of_time()))
         .add_type(TypeId(3));
@@ -827,9 +768,8 @@ async fn test_lambda() {
             (TypeId(8), lambda_application_service),
         ]),
     };
-    let value_storage = InMemoryValueStorage {
-        reference_to_value: Mutex::new(BTreeMap::new()),
-    };
+    let value_storage =
+        crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let arg = value_storage
         .store_value(Arc::new(Value::from_string("arg")))
         .add_type(TypeId(0));

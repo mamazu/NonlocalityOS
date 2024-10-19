@@ -1,4 +1,6 @@
 #![feature(array_chunks)]
+use astraea::storage::InMemoryValueStorage;
+use astraea::storage::StoreValue;
 use astraea::tree::make_beginning_of_time;
 use astraea::tree::make_delay;
 use astraea::tree::make_seconds;
@@ -7,10 +9,8 @@ use astraea::tree::reduce_expression_without_storing_the_final_result;
 use astraea::tree::ActualConsole;
 use astraea::tree::DelayService;
 use astraea::tree::Identity;
-use astraea::tree::InMemoryValueStorage;
 use astraea::tree::ReduceExpression;
 use astraea::tree::ServiceRegistry;
-use astraea::tree::StoreValue;
 use astraea::tree::TypeId;
 use astraea::tree::Value;
 use std::collections::BTreeMap;

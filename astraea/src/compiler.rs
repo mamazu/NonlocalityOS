@@ -1,5 +1,6 @@
-use crate::tree::{
-    CompilerError, CompilerOutput, SourceLocation, StoreValue, TypeId, TypedReference, Value,
+use crate::{
+    storage::StoreValue,
+    tree::{CompilerError, CompilerOutput, SourceLocation, TypeId, TypedReference, Value},
 };
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -669,7 +670,7 @@ pub fn compile(source: &str, storage: &dyn StoreValue) -> CompilerOutput {
 #[cfg(test)]
 mod tests2 {
     use super::*;
-    use crate::tree::InMemoryValueStorage;
+    use crate::storage::InMemoryValueStorage;
 
     #[test]
     fn test_compile_empty_source() {

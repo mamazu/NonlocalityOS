@@ -1,5 +1,6 @@
-use astraea::tree::{
-    BlobDigest, LoadStoreValue, Reference, ReferenceIndex, TypeId, TypedReference, Value,
+use astraea::{
+    storage::LoadStoreValue,
+    tree::{BlobDigest, Reference, ReferenceIndex, TypeId, TypedReference, Value},
 };
 use async_stream::stream;
 use bytes::Buf;
@@ -514,7 +515,7 @@ impl TreeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use astraea::tree::{InMemoryValueStorage, LoadValue, StoreValue};
+    use astraea::storage::{InMemoryValueStorage, LoadValue, StoreValue};
 
     #[tokio::test]
     async fn test_open_directory_get_meta_data() {
