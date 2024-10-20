@@ -883,6 +883,7 @@ dependencies = [
  "hyper-util",
  "relative-path",
  "reqwest_dav",
+ "rusqlite",
  "test-log",
  "tokio",
  "tracing",

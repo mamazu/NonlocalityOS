@@ -1,10 +1,9 @@
-use astraea::{storage::InMemoryValueStorage, tree::BlobDigest};
+use astraea::{storage::SQLiteStorage, tree::BlobDigest};
 use dav_server::{fakels::FakeLs, DavHandler};
 use dogbox_tree_editor::{DirectoryEntry, DirectoryEntryKind, OpenDirectory};
 use hyper::{body, server::conn::http1, Request};
 use hyper_util::rt::TokioIo;
 use std::{
-    collections::BTreeMap,
     convert::Infallible,
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -18,8 +17,27 @@ use file_system::DogBoxFileSystem;
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
-    // TODO: persistance
-    let blob_storage = Arc::new(InMemoryValueStorage::new(Mutex::new(BTreeMap::new())));
+    let database_file_name = std::env::current_dir()
+        .unwrap()
+        .join("dogbox_dav_server.sqlite");
+    let database_existed = std::fs::exists(&database_file_name).unwrap();
+    let sqlite_connection = rusqlite::Connection::open(&database_file_name)?;
+    if !database_existed {
+        match SQLiteStorage::create_schema(&sqlite_connection) {
+            Ok(_) => {}
+            Err(error) => {
+                println!(
+                    "Could not create SQL schema in {}: {:?}",
+                    &database_file_name.display(),
+                    &error
+                );
+                println!("Deleting {}", &database_file_name.display());
+                std::fs::remove_file(&database_file_name).unwrap();
+                panic!();
+            }
+        }
+    }
+    let blob_storage = Arc::new(SQLiteStorage::new(Mutex::new(sqlite_connection)));
     let root = Arc::new(OpenDirectory::from_entries(
         vec![DirectoryEntry {
             name: "example.txt".to_string(),
@@ -42,10 +60,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Serving on http://{}", addr);
 
     tokio::spawn(async move {
+        let mut previous_root_digest = None;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let root_digest = root.poll_status().await;
-            println!("Root digest: {:?}", &root_digest);
+            match root.poll_status().await {
+                Ok(root_digest) => {
+                    if previous_root_digest != Some(root_digest) {
+                        println!("Root digest changed: {:?}", &root_digest);
+                        previous_root_digest = Some(root_digest);
+                    }
+                }
+                Err(error) => {
+                    println!("Could not poll root status: {:?}", &error);
+                }
+            }
         }
     });
 

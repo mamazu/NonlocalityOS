@@ -1,6 +1,5 @@
-use rusqlite::Transaction;
-
 use crate::tree::{calculate_reference, BlobDigest, Reference, TypeId, TypedReference, Value};
+use rusqlite::Transaction;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -69,11 +68,11 @@ impl LoadValue for InMemoryValueStorage {
 impl LoadStoreValue for InMemoryValueStorage {}
 
 pub struct SQLiteStorage {
-    connection: rusqlite::Connection,
+    connection: Mutex<rusqlite::Connection>,
 }
 
 impl SQLiteStorage {
-    pub fn new(connection: rusqlite::Connection) -> Self {
+    pub fn new(connection: Mutex<rusqlite::Connection>) -> Self {
         Self { connection }
     }
 
@@ -114,11 +113,11 @@ impl SQLiteStorage {
 
 impl StoreValue for SQLiteStorage {
     fn store_value(&self, value: Arc<Value>) -> std::result::Result<Reference, StoreError> {
+        let connection_locked = self.connection.lock().unwrap();
         let reference = calculate_reference(&value);
         let origin_digest: [u8; 64] = reference.digest.into();
-        let transaction = Transaction::new_unchecked(&self.connection, rusqlite::TransactionBehavior::Deferred).unwrap(/*TODO*/);
-        let existing_count: i64 = self
-            .connection
+        let transaction = Transaction::new_unchecked(&connection_locked, rusqlite::TransactionBehavior::Deferred).unwrap(/*TODO*/);
+        let existing_count: i64 = connection_locked
             .query_row_and_then(
                 "SELECT COUNT(*) FROM value WHERE digest = ?",
                 (&origin_digest,),
@@ -130,14 +129,14 @@ impl StoreValue for SQLiteStorage {
             1 => return Ok(reference),
             _ => panic!(),
         }
-        self.connection.execute(
+        connection_locked.execute(
             "INSERT INTO value (digest, serialized) VALUES (?1, ?2)",
             (&origin_digest, &value.serialized),
         ).unwrap(/*TODO*/);
-        let inserted_value_rowid = self.connection.last_insert_rowid();
+        let inserted_value_rowid = connection_locked.last_insert_rowid();
         for reference in &value.references {
             let target_digest: [u8; 64] = reference.reference.digest.into();
-            self.connection.execute(
+            connection_locked.execute(
                 "INSERT INTO reference (origin, target) VALUES (?1, ?2)",
                 (&inserted_value_rowid, &target_digest),
             ).unwrap(/*TODO*/);
@@ -149,16 +148,16 @@ impl StoreValue for SQLiteStorage {
 
 impl LoadValue for SQLiteStorage {
     fn load_value(&self, reference: &Reference) -> Option<Arc<Value>> {
+        let connection_locked = self.connection.lock().unwrap();
         let digest: [u8; 64] = reference.digest.into();
-        let (id, serialized) = self.connection.query_row_and_then("SELECT id, serialized FROM value WHERE digest = ?1", 
-        (&digest, )
-       ,
+        let (id, serialized) = connection_locked.query_row_and_then("SELECT id, serialized FROM value WHERE digest = ?1", 
+        (&digest, )       ,
          |row| -> rusqlite::Result<_> {
             let id : i64 = row.get(0).unwrap(/*TODO*/);
             let serialized = row.get(1).unwrap(/*TODO*/);
             Ok((id, serialized))
          } ).unwrap(/*TODO*/);
-        let mut stmt = self.connection.prepare("SELECT target FROM reference WHERE origin = ?").unwrap(/*TODO*/);
+        let mut stmt = connection_locked.prepare("SELECT target FROM reference WHERE origin = ?").unwrap(/*TODO*/);
         let person_iter = stmt.query_map([&id], |row| {
         let target : [u8; 64] = row.get(0)?;
         Ok(TypedReference::new(TypeId(0), Reference::new(BlobDigest::new(&target))))

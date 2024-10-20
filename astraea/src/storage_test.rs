@@ -4,7 +4,7 @@ mod tests {
         storage::{LoadValue, SQLiteStorage, StoreValue},
         tree::{BlobDigest, Reference, TypeId, TypedReference, Value},
     };
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -24,7 +24,7 @@ mod tests {
             let connection1 = rusqlite::Connection::open(&database_file_name).unwrap();
             connection1.pragma_update(None, "key", correct_key).unwrap();
             SQLiteStorage::create_schema(&connection1).unwrap();
-            let storage = SQLiteStorage::new(connection1);
+            let storage = SQLiteStorage::new(Mutex::new(connection1));
             let reference = storage.store_value(Arc::new(Value::from_unit())).unwrap();
             assert_eq!(expected_reference, reference.digest);
         }
@@ -33,7 +33,7 @@ mod tests {
             connection2
                 .pragma_update(None, "key", incorrect_key)
                 .unwrap();
-            let storage = SQLiteStorage::new(connection2);
+            let storage = SQLiteStorage::new(Mutex::new(connection2));
             let result = storage.store_value(Arc::new(Value::from_unit()));
             let expected : std::result::Result<Reference, StoreError> = Err(StoreError::Rusqlite("SqliteFailure(Error { code: NotADatabase, extended_code: 26 }, Some(\"file is not a database\"))".to_string()));
             assert_eq!(&expected, &result);
@@ -41,7 +41,7 @@ mod tests {
         {
             let connection3 = rusqlite::Connection::open(&database_file_name).unwrap();
             connection3.pragma_update(None, "key", correct_key).unwrap();
-            let storage = SQLiteStorage::new(connection3);
+            let storage = SQLiteStorage::new(Mutex::new(connection3));
             let loaded_back = storage
                 .load_value(&Reference::new(expected_reference))
                 .unwrap();
@@ -59,7 +59,7 @@ mod tests {
     fn test_store_unit_first_time() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         SQLiteStorage::create_schema(&connection).unwrap();
-        let storage = SQLiteStorage::new(connection);
+        let storage = SQLiteStorage::new(Mutex::new(connection));
         let reference = storage.store_value(Arc::new(Value::from_unit())).unwrap();
         assert_eq!(
             BlobDigest::new(&[
@@ -78,7 +78,7 @@ mod tests {
     fn test_store_unit_again() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         SQLiteStorage::create_schema(&connection).unwrap();
-        let storage = SQLiteStorage::new(connection);
+        let storage = SQLiteStorage::new(Mutex::new(connection));
         let reference_1 = storage.store_value(Arc::new(Value::from_unit())).unwrap();
         assert_eq!(
             BlobDigest::new(&[
@@ -101,7 +101,7 @@ mod tests {
     fn test_store_serialized() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         SQLiteStorage::create_schema(&connection).unwrap();
-        let storage = SQLiteStorage::new(connection);
+        let storage = SQLiteStorage::new(Mutex::new(connection));
         let value = Arc::new(Value::new(b"test 123".to_vec(), vec![]));
         let reference = storage.store_value(value.clone()).unwrap();
         assert_eq!(
@@ -121,7 +121,7 @@ mod tests {
     fn test_store_reference() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         SQLiteStorage::create_schema(&connection).unwrap();
-        let storage = SQLiteStorage::new(connection);
+        let storage = SQLiteStorage::new(Mutex::new(connection));
         let referenced_digest = BlobDigest::hash(b"ref");
         let value = Arc::new(Value::new(
             b"test 123".to_vec(),
