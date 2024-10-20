@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::storage::{LoadValue, StoreValue};
+use crate::storage::{LoadValue, StoreError, StoreValue};
 
 /// SHA3-512 hash. Supports Serde because we will need this type a lot in network protocols and file formats.
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy, Hash)]
@@ -144,7 +144,7 @@ pub trait ReduceExpression: Sync + Send {
 #[derive(Clone, PartialEq, Debug)]
 pub enum ReductionError {
     NoServiceForType(TypeId),
-    Io,
+    Io(StoreError),
     UnknownReference(Reference),
 }
 
@@ -203,6 +203,7 @@ pub async fn reduce_expression_from_reference(
     Ok(ReferencedValue::new(
         storage
             .store_value(arc_value.clone())
+            .map_err(|error| ReductionError::Io(error))?
             .add_type(value.type_id),
         arc_value,
     ))
@@ -359,9 +360,11 @@ async fn test_effect() {
         crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let past = value_storage
         .store_value(Arc::new(make_beginning_of_time()))
+        .unwrap()
         .add_type(TypeId(3));
     let message = value_storage
         .store_value(Arc::new(Value::from_string("hello, world!\n")))
+        .unwrap()
         .add_type(TypeId(0));
     let text_in_console = make_text_in_console(past, message);
     let result = reduce_expression_without_storing_the_final_result(
@@ -448,12 +451,15 @@ async fn test_sum() {
         crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let a = value_storage
         .store_value(Arc::new(make_seconds(1).value))
+        .unwrap()
         .add_type(TypeId(5));
     let b = value_storage
         .store_value(Arc::new(make_seconds(2).value))
+        .unwrap()
         .add_type(TypeId(5));
     let sum = value_storage
         .store_value(Arc::new(make_sum(vec![a, b]).value))
+        .unwrap()
         .add_type(TypeId(6));
     let result = reduce_expression_from_reference(&sum, &services, &value_storage, &value_storage)
         .await
@@ -472,12 +478,15 @@ async fn test_nested_sum() {
         crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let a = value_storage
         .store_value(Arc::new(make_seconds(1).value))
+        .unwrap()
         .add_type(TypeId(5));
     let b = value_storage
         .store_value(Arc::new(make_seconds(2).value))
+        .unwrap()
         .add_type(TypeId(5));
     let c = value_storage
         .store_value(Arc::new(make_sum(vec![a.clone(), b]).value))
+        .unwrap()
         .add_type(TypeId(6));
     let sum = make_sum(vec![a.clone(), a, c]);
     let result = reduce_expression_without_storing_the_final_result(
@@ -550,15 +559,19 @@ async fn test_delay() {
         crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let past = value_storage
         .store_value(Arc::new(make_beginning_of_time()))
+        .unwrap()
         .add_type(TypeId(3));
     let duration = value_storage
         .store_value(Arc::new(make_seconds(/*can't waste time here*/ 0).value))
+        .unwrap()
         .add_type(TypeId(5));
     let delay = value_storage
         .store_value(Arc::new(make_delay(past.clone(), duration).value))
+        .unwrap()
         .add_type(TypeId(4));
     let message = value_storage
         .store_value(Arc::new(Value::from_string("hello, world!\n")))
+        .unwrap()
         .add_type(TypeId(0));
     let text_in_console = make_text_in_console(delay, message);
     let result = reduce_expression_without_storing_the_final_result(
@@ -573,6 +586,7 @@ async fn test_delay() {
         make_effect(
             value_storage
                 .store_value(Arc::new(make_effect(past).value))
+                .unwrap()
                 .add_type(TypeId(3))
         ),
         result
@@ -699,6 +713,7 @@ fn replace_variable_recursively(
             {
                 let stored = storage
                     .store_value(Arc::new(replaced.value))
+                    .unwrap(/*TODO*/)
                     .add_type(replaced.type_id);
                 references.push(stored);
                 has_replaced_something = true;
@@ -772,21 +787,27 @@ async fn test_lambda() {
         crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let arg = value_storage
         .store_value(Arc::new(Value::from_string("arg")))
+        .unwrap()
         .add_type(TypeId(0));
     let one = value_storage
         .store_value(Arc::new(make_seconds(1).value))
+        .unwrap()
         .add_type(TypeId(5));
     let sum = value_storage
         .store_value(Arc::new(make_sum(vec![one, arg]).value))
+        .unwrap()
         .add_type(TypeId(6));
     let plus_one = value_storage
         .store_value(Arc::new(make_lambda(Lambda::new(arg, sum)).value))
+        .unwrap()
         .add_type(TypeId(7));
     let two = value_storage
         .store_value(Arc::new(make_seconds(2).value))
+        .unwrap()
         .add_type(TypeId(5));
     let call = value_storage
         .store_value(Arc::new(make_lambda_application(plus_one, two).value))
+        .unwrap()
         .add_type(TypeId(8));
     // When we apply a function to an argument we receive the body with the variable replaced.
     let reduced_once =

@@ -1,5 +1,5 @@
 use astraea::{
-    storage::LoadStoreValue,
+    storage::{LoadStoreValue, StoreError},
     tree::{BlobDigest, Reference, ReferenceIndex, TypeId, TypedReference, Value},
 };
 use async_stream::stream;
@@ -74,14 +74,18 @@ impl NamedEntry {
         &'t self,
     ) -> Pin<
         Box<
-            dyn std::future::Future<Output = (serialization::DirectoryEntryKind, BlobDigest)>
-                + Send
+            dyn std::future::Future<
+                    Output = std::result::Result<
+                        (serialization::DirectoryEntryKind, BlobDigest),
+                        StoreError,
+                    >,
+                > + Send
                 + 't,
         >,
     > {
         match self {
             NamedEntry::NotOpen(directory_entry_kind, blob_digest) => {
-                Box::pin(std::future::ready((
+                Box::pin(std::future::ready(Ok((
                     match *directory_entry_kind {
                         DirectoryEntryKind::Directory => {
                             serialization::DirectoryEntryKind::Directory
@@ -91,18 +95,18 @@ impl NamedEntry {
                         }
                     },
                     *blob_digest,
-                )))
+                ))))
             }
             NamedEntry::OpenRegularFile(open_file) => Box::pin(async move {
-                let open_file_status = open_file.poll_status().await;
-                (
+                let open_file_status = open_file.poll_status().await?;
+                Ok((
                     serialization::DirectoryEntryKind::File(open_file_status.size),
                     open_file_status.content,
-                )
+                ))
             }),
             NamedEntry::OpenSubdirectory(directory) => Box::pin(async move {
-                let committed = directory.poll_status().await;
-                (serialization::DirectoryEntryKind::Directory, committed)
+                let committed = directory.poll_status().await?;
+                Ok((serialization::DirectoryEntryKind::Directory, committed))
             }),
         }
     }
@@ -243,13 +247,13 @@ impl OpenDirectory {
         }
     }
 
-    pub async fn poll_status(&self) -> BlobDigest {
+    pub async fn poll_status(&self) -> std::result::Result<BlobDigest, StoreError> {
         let names_locked = self.names.lock().await;
         let mut children = std::collections::BTreeMap::new();
         let mut references = Vec::new();
         for entry in names_locked.iter() {
             let name = FileName::try_from(entry.0.as_str()).unwrap();
-            let (kind, digest) = entry.1.poll_status().await;
+            let (kind, digest) = entry.1.poll_status().await?;
             let reference_index = ReferenceIndex(references.len() as u64);
             references.push(TypedReference::new(
                 TypeId(/*TODO get rid of this ID*/ 0),
@@ -267,8 +271,8 @@ impl OpenDirectory {
         let serialized = postcard::to_allocvec(&tree).unwrap();
         let reference = self
             .storage
-            .store_value(Arc::new(Value::new(serialized, references)));
-        reference.digest
+            .store_value(Arc::new(Value::new(serialized, references)))?;
+        Ok(reference.digest)
     }
 }
 
@@ -429,17 +433,17 @@ impl OpenFile {
 
     pub fn flush(&self) {}
 
-    pub async fn poll_status(&self) -> FileContentDescription {
+    pub async fn poll_status(&self) -> std::result::Result<FileContentDescription, StoreError> {
         let mut content_locked = self.content.lock().await;
         let size = content_locked.data.len();
         let content_reference = self
             .storage
-            .store_value(Arc::new(Value::new(content_locked.data.clone(), vec![])));
+            .store_value(Arc::new(Value::new(content_locked.data.clone(), vec![])))?;
         content_locked.has_uncommitted_changes = false;
-        FileContentDescription {
+        Ok(FileContentDescription {
             content: content_reference.digest,
             size: size as u64,
-        }
+        })
     }
 }
 
@@ -542,7 +546,7 @@ mod tests {
             )])),
             storage: storage.clone(),
         };
-        let status: BlobDigest = directory.poll_status().await;
+        let status: BlobDigest = directory.poll_status().await.unwrap();
         assert_eq!(
             BlobDigest::new(&[
                 104, 239, 112, 74, 159, 151, 115, 53, 77, 79, 0, 61, 0, 255, 60, 199, 108, 6, 169,
@@ -643,7 +647,10 @@ mod tests {
     }
 
     impl StoreValue for NeverUsedStorage {
-        fn store_value(&self, _value: Arc<astraea::tree::Value>) -> astraea::tree::Reference {
+        fn store_value(
+            &self,
+            _value: Arc<astraea::tree::Value>,
+        ) -> std::result::Result<astraea::tree::Reference, StoreError> {
             panic!()
         }
     }

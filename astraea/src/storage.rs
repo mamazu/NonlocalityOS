@@ -6,8 +6,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum StoreError {
+    NoSpace,
+    Rusqlite(String),
+}
+
 pub trait StoreValue {
-    fn store_value(&self, value: Arc<Value>) -> Reference;
+    fn store_value(&self, value: Arc<Value>) -> std::result::Result<Reference, StoreError>;
 }
 
 pub trait LoadValue {
@@ -43,13 +49,13 @@ impl InMemoryValueStorage {
 }
 
 impl StoreValue for InMemoryValueStorage {
-    fn store_value(&self, value: Arc<Value>) -> Reference {
+    fn store_value(&self, value: Arc<Value>) -> std::result::Result<Reference, StoreError> {
         let mut lock = self.reference_to_value.lock().unwrap();
         let reference = calculate_reference(&value);
         if !lock.contains_key(&reference) {
             lock.insert(reference.clone(), value);
         }
-        reference
+        Ok(reference)
     }
 }
 
@@ -107,18 +113,21 @@ impl SQLiteStorage {
 }
 
 impl StoreValue for SQLiteStorage {
-    fn store_value(&self, value: Arc<Value>) -> Reference {
+    fn store_value(&self, value: Arc<Value>) -> std::result::Result<Reference, StoreError> {
         let reference = calculate_reference(&value);
         let origin_digest: [u8; 64] = reference.digest.into();
         let transaction = Transaction::new_unchecked(&self.connection, rusqlite::TransactionBehavior::Deferred).unwrap(/*TODO*/);
-        let existing_count: i64 = self.connection.query_row_and_then("SELECT COUNT(*) FROM value WHERE digest = ?", (&origin_digest, ), |row| 
-       -> rusqlite:: Result<
-       _, rusqlite::Error> {
-            row.get(0)
-        }).unwrap(/*TODO*/);
+        let existing_count: i64 = self
+            .connection
+            .query_row_and_then(
+                "SELECT COUNT(*) FROM value WHERE digest = ?",
+                (&origin_digest,),
+                |row| -> rusqlite::Result<_, rusqlite::Error> { row.get(0) },
+            )
+            .map_err(|error| StoreError::Rusqlite(format!("{:?}", &error)))?;
         match existing_count {
             0 => {}
-            1 => return reference,
+            1 => return Ok(reference),
             _ => panic!(),
         }
         self.connection.execute(
@@ -134,7 +143,7 @@ impl StoreValue for SQLiteStorage {
             ).unwrap(/*TODO*/);
         }
         transaction.commit().unwrap(/*TODO*/);
-        reference
+        Ok(reference)
     }
 }
 

@@ -33,21 +33,27 @@ async fn main() -> std::io::Result<()> {
     let value_storage = InMemoryValueStorage::new(Mutex::new(BTreeMap::new()));
     let past = value_storage
         .store_value(Arc::new(make_beginning_of_time()))
+        .unwrap()
         .add_type(TypeId(3));
     let message_1 = value_storage
         .store_value(Arc::new(Value::from_string("hello, ")))
+        .unwrap()
         .add_type(TypeId(0));
     let text_in_console_1 = value_storage
         .store_value(Arc::new(make_text_in_console(past, message_1).value))
+        .unwrap()
         .add_type(TypeId(2));
     let duration = value_storage
         .store_value(Arc::new(make_seconds(3).value))
+        .unwrap()
         .add_type(TypeId(5));
     let delay = value_storage
         .store_value(Arc::new(make_delay(text_in_console_1, duration).value))
+        .unwrap()
         .add_type(TypeId(4));
     let message_2 = value_storage
         .store_value(Arc::new(Value::from_string("world!\n")))
+        .unwrap()
         .add_type(TypeId(0));
     let text_in_console_2 = make_text_in_console(delay, message_2);
     let _result = reduce_expression_without_storing_the_final_result(
