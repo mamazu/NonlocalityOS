@@ -6,7 +6,6 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn test_sqlcipher_encryption() {
         use crate::storage::StoreError;
