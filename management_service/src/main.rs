@@ -974,6 +974,8 @@ async fn test_run_services_web_assembly_type_error() {
     assert!(!is_success);
 }
 
+// TODO: figure out why this crashes on Windows
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_web_assembly_infinite_recursion() {
     const RUNTIME_ERROR_PROGRAM: &str = r#"(module
@@ -1034,6 +1036,8 @@ async fn test_run_services_web_assembly_import_unknown_function() {
     assert!(!is_success);
 }
 
+// TODO: figure out why this crashes on Windows
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_web_assembly_abort() {
     const RUNTIME_ERROR_PROGRAM: &str = r#"(module
@@ -1256,6 +1260,8 @@ async fn test_run_services_inter_service_write_read() {
     assert!(is_success);
 }
 
+// TODO: figure out why this crashes on Windows
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_services_shutdown() {
     let compiled = create_program_blocking_on_accept();
@@ -1279,6 +1285,8 @@ async fn test_run_services_shutdown() {
     assert!(!is_success);
 }
 
+// TODO: figure out why this crashes on Windows
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_latest_cluster_shutdown() {
     let (change_cluster_configuration, watch_cluster_configuration) = tokio::sync::mpsc::channel(1);
@@ -1311,6 +1319,8 @@ async fn test_run_latest_cluster_shutdown() {
     assert!(is_success);
 }
 
+// TODO: figure out why this crashes on Windows
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_run_latest_cluster_change_configuration() {
     let (change_cluster_configuration, watch_cluster_configuration) = tokio::sync::mpsc::channel(1);

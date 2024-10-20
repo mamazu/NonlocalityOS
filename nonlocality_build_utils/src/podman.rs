@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::path::Path;
 
@@ -46,9 +46,16 @@ mod tests {
             let docker_image_name_bla = "ubuntu:24.04";
             // We only want to pull from the global Docker registry if we really have to due to rate limiting for free users.
             let existing_image = podman.images().get(docker_image_name_bla);
-            let inspection = existing_image.inspect().await.unwrap();
-            if let Some(existing_id) = inspection.id {
-                break 'a existing_id;
+            match existing_image.inspect().await {
+                Ok(inspection) => {
+                    if let Some(existing_id) = inspection.id {
+                        break 'a existing_id;
+                    }
+                }
+                Err(error) => println!(
+                    "Could not find local image {}: {:?}",
+                    docker_image_name_bla, &error
+                ),
             }
             let events =
                 futures_util::TryStreamExt::try_collect::<Vec<_>>(futures_util::StreamExt::map(

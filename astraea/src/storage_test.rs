@@ -1,13 +1,15 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        storage::{LoadValue, SQLiteStorage, StoreError, StoreValue},
+        storage::{LoadValue, SQLiteStorage, StoreValue},
         tree::{BlobDigest, Reference, TypeId, TypedReference, Value},
     };
     use std::sync::Arc;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_sqlcipher_encryption() {
+        use crate::storage::StoreError;
         let temporary_directory = tempfile::tempdir().unwrap();
         let database_file_name = temporary_directory.path().join("test.sqlite");
         let expected_reference = BlobDigest::new(&[

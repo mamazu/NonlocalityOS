@@ -1,15 +1,19 @@
 # Setup
 
-* install Rust: https://www.rust-lang.org/learn/get-started (tested with Rust 1.80.0)
+* install Rust: <https://www.rust-lang.org/learn/get-started> (tested with Rust 1.84.0)
 * restart your terminal
 
-## Windows (not supported at the moment)
+## Windows
 
-* install Visual Studio with C++ or whatever
+* install Visual Studio 2022 including the C++ toolchain
+  * possibly, the [Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) are sufficient
+* install <https://strawberryperl.com/> (tested with *5.40.0.1 (2024-08-10)*)
+* restart your terminal
 
 ## Linux Mint / Ubuntu / Debian
 
 * `sudo apt install build-essential libssl-dev podman`
+* restart your terminal
 
 # Test
 
@@ -26,7 +30,7 @@
 
 * run `./test.sh` or `./build.sh`
 
-## Windows (not supported at the moment)
+## Windows
 
 * run `test.bat` or `build.bat`
 
