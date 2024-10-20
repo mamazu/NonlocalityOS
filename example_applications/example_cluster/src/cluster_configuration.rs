@@ -25,11 +25,7 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
     let essrpc_client_id = ServiceId(2);
     let provide_api_id = ServiceId(3);
     let call_api_id = ServiceId(4);
-    let database_server_id = ServiceId(5);
-    let database_client_id = ServiceId(6);
     let idle_service_id = ServiceId(7);
-    let log_server_id = ServiceId(8);
-    let log_client_id = ServiceId(9);
     let telegram_bot_id = ServiceId(10);
 
     ClusterConfiguration {
@@ -104,73 +100,11 @@ pub async fn compile_cluster_configuration(target: &std::path::Path) -> ClusterC
                 filesystem_dir_unique_id: None,
             },
             Service {
-                id: database_server_id,
-                label: "Database Server".to_string(),
-                outgoing_interfaces: BTreeMap::new(),
-                wasi: WasiProcess {
-                    code: read_blob(
-                        &target
-                            .join(WASIP1_THREADS_TARGET)
-                            .join("release/database_server.wasm"),
-                    )
-                    .await,
-                    has_threads: true,
-                },
-                filesystem_dir_unique_id: Some("example_database_server".to_string()),
-            },
-            Service {
-                id: database_client_id,
-                label: "Database Client".to_string(),
-                outgoing_interfaces: BTreeMap::from([(
-                    OutgoingInterfaceId(0),
-                    IncomingInterface::new(database_server_id, IncomingInterfaceId(0)),
-                )]),
-                wasi: WasiProcess {
-                    code: read_blob(
-                        &target
-                            .join(WASIP1_TARGET)
-                            .join("release/database_client.wasm"),
-                    )
-                    .await,
-                    has_threads: false,
-                },
-                filesystem_dir_unique_id: None,
-            },
-            Service {
                 id: idle_service_id,
                 label: "Idle Service".to_string(),
                 outgoing_interfaces: BTreeMap::new(),
                 wasi: WasiProcess {
                     code: read_blob(&target.join(WASIP1_TARGET).join("release/idle_service.wasm"))
-                        .await,
-                    has_threads: false,
-                },
-                filesystem_dir_unique_id: None,
-            },
-            Service {
-                id: log_server_id,
-                label: "Logger Server".to_string(),
-                outgoing_interfaces: BTreeMap::new(),
-                wasi: WasiProcess {
-                    code: read_blob(
-                        &target
-                            .join(WASIP1_THREADS_TARGET)
-                            .join("release/log_server.wasm"),
-                    )
-                    .await,
-                    has_threads: true,
-                },
-                filesystem_dir_unique_id: Some("example_logger".to_string()),
-            },
-            Service {
-                id: log_client_id,
-                label: "Logger Client".to_string(),
-                outgoing_interfaces: BTreeMap::from([(
-                    OutgoingInterfaceId(0),
-                    IncomingInterface::new(log_server_id, IncomingInterfaceId(0)),
-                )]),
-                wasi: WasiProcess {
-                    code: read_blob(&target.join(WASIP1_TARGET).join("release/log_client.wasm"))
                         .await,
                     has_threads: false,
                 },

@@ -284,30 +284,6 @@ async fn build(
                         DirectoryEntry::Program(Program::wasi()),
                     ),
                     (
-                        "database".to_string(),
-                        DirectoryEntry::Directory(Directory {
-                            entries: BTreeMap::from([
-                                (
-                                    "database_client".to_string(),
-                                    DirectoryEntry::Program(Program::wasi()),
-                                ),
-                                (
-                                    "database_server".to_string(),
-                                    DirectoryEntry::Program(match maybe_wasi_sdk {
-                                        Some(ref wasi_sdk) => {
-                                            Program::wasi_threads(wasi_sdk.clone())
-                                        }
-                                        None => Program::other(),
-                                    }),
-                                ),
-                                (
-                                    "database_trait".to_string(),
-                                    DirectoryEntry::Program(Program::wasi()),
-                                ),
-                            ]),
-                        }),
-                    ),
-                    (
                         "essrpc_example".to_string(),
                         DirectoryEntry::Directory(Directory {
                             entries: BTreeMap::from([
@@ -326,30 +302,6 @@ async fn build(
                                 ),
                                 (
                                     "essrpc_trait".to_string(),
-                                    DirectoryEntry::Program(Program::wasi()),
-                                ),
-                            ]),
-                        }),
-                    ),
-                    (
-                        "logging".to_string(),
-                        DirectoryEntry::Directory(Directory {
-                            entries: BTreeMap::from([
-                                (
-                                    "log_client".to_string(),
-                                    DirectoryEntry::Program(Program::wasi()),
-                                ),
-                                (
-                                    "log_server".to_string(),
-                                    DirectoryEntry::Program(match maybe_wasi_sdk {
-                                        Some(ref wasi_sdk) => {
-                                            Program::wasi_threads(wasi_sdk.clone())
-                                        }
-                                        None => Program::other(),
-                                    }),
-                                ),
-                                (
-                                    "log_trait".to_string(),
                                     DirectoryEntry::Program(Program::wasi()),
                                 ),
                             ]),

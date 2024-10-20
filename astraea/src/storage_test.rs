@@ -1,0 +1,103 @@
+#[cfg(test)]
+mod tests {
+    use crate::{
+        storage::{LoadValue, SQLiteStorage, StoreValue},
+        tree::{BlobDigest, Reference, TypeId, TypedReference, Value},
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn test_create_schema() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        SQLiteStorage::create_schema(&connection).unwrap();
+    }
+
+    #[test]
+    fn test_store_unit_first_time() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        SQLiteStorage::create_schema(&connection).unwrap();
+        let storage = SQLiteStorage::new(connection);
+        let reference = storage.store_value(Arc::new(Value::from_unit()));
+        assert_eq!(
+            BlobDigest::new(&[
+                166, 159, 115, 204, 162, 58, 154, 197, 200, 181, 103, 220, 24, 90, 117, 110, 151,
+                201, 130, 22, 79, 226, 88, 89, 224, 209, 220, 193, 71, 92, 128, 166, 21, 178, 18,
+                58, 241, 245, 249, 76, 17, 227, 233, 64, 44, 58, 197, 88, 245, 0, 25, 157, 149,
+                182, 211, 227, 1, 117, 133, 134, 40, 29, 205, 38
+            ]),
+            reference.digest
+        );
+        let loaded_back = storage.load_value(&reference).unwrap();
+        assert_eq!(Value::from_unit(), *loaded_back);
+    }
+
+    #[test]
+    fn test_store_unit_again() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        SQLiteStorage::create_schema(&connection).unwrap();
+        let storage = SQLiteStorage::new(connection);
+        let reference_1 = storage.store_value(Arc::new(Value::from_unit()));
+        assert_eq!(
+            BlobDigest::new(&[
+                166, 159, 115, 204, 162, 58, 154, 197, 200, 181, 103, 220, 24, 90, 117, 110, 151,
+                201, 130, 22, 79, 226, 88, 89, 224, 209, 220, 193, 71, 92, 128, 166, 21, 178, 18,
+                58, 241, 245, 249, 76, 17, 227, 233, 64, 44, 58, 197, 88, 245, 0, 25, 157, 149,
+                182, 211, 227, 1, 117, 133, 134, 40, 29, 205, 38
+            ]),
+            reference_1.digest
+        );
+
+        let reference_2 = storage.store_value(Arc::new(Value::from_unit()));
+        assert_eq!(reference_1.digest, reference_2.digest);
+
+        let loaded_back = storage.load_value(&reference_1).unwrap();
+        assert_eq!(Value::from_unit(), *loaded_back);
+    }
+
+    #[test]
+    fn test_store_serialized() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        SQLiteStorage::create_schema(&connection).unwrap();
+        let storage = SQLiteStorage::new(connection);
+        let value = Arc::new(Value::new(b"test 123".to_vec(), vec![]));
+        let reference = storage.store_value(value.clone());
+        assert_eq!(
+            BlobDigest::new(&[
+                130, 115, 235, 131, 140, 52, 158, 195, 128, 151, 52, 84, 4, 23, 120, 30, 186, 184,
+                216, 102, 157, 132, 234, 172, 95, 141, 225, 255, 103, 69, 15, 200, 28, 184, 128,
+                242, 157, 50, 240, 255, 14, 154, 197, 128, 74, 128, 191, 86, 117, 225, 34, 104, 53,
+                16, 115, 92, 235, 146, 231, 135, 79, 204, 161, 250
+            ]),
+            reference.digest
+        );
+        let loaded_back = storage.load_value(&reference).unwrap();
+        assert_eq!(*value, *loaded_back);
+    }
+
+    #[test]
+    fn test_store_reference() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        SQLiteStorage::create_schema(&connection).unwrap();
+        let storage = SQLiteStorage::new(connection);
+        let referenced_digest = BlobDigest::hash(b"ref");
+        let value = Arc::new(Value::new(
+            b"test 123".to_vec(),
+            vec![TypedReference::new(
+                TypeId(0),
+                Reference::new(referenced_digest),
+            )],
+        ));
+        let reference = storage.store_value(value.clone());
+        assert_eq!(
+            BlobDigest::new(&[
+                152, 182, 130, 212, 237, 124, 174, 45, 113, 181, 43, 5, 72, 243, 126, 181, 225, 36,
+                48, 119, 180, 191, 92, 196, 61, 215, 192, 223, 229, 14, 244, 98, 164, 29, 13, 112,
+                236, 65, 171, 221, 49, 239, 74, 43, 206, 121, 210, 155, 155, 175, 238, 69, 255,
+                222, 33, 84, 166, 21, 144, 147, 44, 156, 146, 215
+            ]),
+            reference.digest
+        );
+        let loaded_back = storage.load_value(&reference).unwrap();
+        assert_eq!(*value, *loaded_back);
+    }
+}

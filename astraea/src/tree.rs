@@ -67,8 +67,8 @@ impl Reference {
 
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Debug, Copy)]
 pub struct TypedReference {
-    type_id: TypeId,
-    reference: Reference,
+    pub type_id: TypeId,
+    pub reference: Reference,
 }
 
 impl TypedReference {
