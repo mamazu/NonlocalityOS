@@ -20,4 +20,4 @@ futures-util = "0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 podman-api = "0"
-users = "0"
+uzers = "0"

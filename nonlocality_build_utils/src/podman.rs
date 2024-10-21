@@ -38,7 +38,7 @@ mod tests {
     async fn test_podman() {
         enable_podman_unix_socket().await;
         let podman = podman_api::Podman::unix_versioned(
-            format!("/run/user/{}/podman/podman.sock", users::get_current_uid()),
+            format!("/run/user/{}/podman/podman.sock", uzers::get_current_uid()),
             podman_api::ApiVersion::new(4, Some(3), Some(1)),
         );
         println!("Socket enabled");
