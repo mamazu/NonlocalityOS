@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        storage::{LoadValue, SQLiteStorage, StoreValue},
+        storage::{LoadRoot, LoadValue, SQLiteStorage, StoreValue, UpdateRoot},
         tree::{BlobDigest, Reference, TypeId, TypedReference, Value},
     };
     use std::sync::{Arc, Mutex};
@@ -141,5 +141,22 @@ mod tests {
         );
         let loaded_back = storage.load_value(&reference).unwrap();
         assert_eq!(*value, *loaded_back);
+    }
+
+    #[test]
+    fn test_update_root() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        SQLiteStorage::create_schema(&connection).unwrap();
+        let storage = SQLiteStorage::new(Mutex::new(connection));
+        let reference_1 = storage.store_value(Arc::new(Value::from_unit())).unwrap();
+        let reference_2 = storage
+            .store_value(Arc::new(Value::new(b"test 123".to_vec(), vec![])))
+            .unwrap();
+        let name = "test";
+        assert_eq!(None, storage.load_root(name));
+        storage.update_root(name, &reference_1.digest);
+        assert_eq!(Some(reference_1.digest), storage.load_root(name));
+        storage.update_root(name, &reference_2.digest);
+        assert_eq!(Some(reference_2.digest), storage.load_root(name));
     }
 }

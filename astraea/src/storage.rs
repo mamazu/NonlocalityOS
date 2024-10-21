@@ -27,6 +27,14 @@ impl std::fmt::Debug for dyn LoadStoreValue + Send + Sync {
     }
 }
 
+pub trait UpdateRoot {
+    fn update_root(&self, name: &str, target: &BlobDigest);
+}
+
+pub trait LoadRoot {
+    fn load_root(&self, name: &str) -> Option<BlobDigest>;
+}
+
 pub struct InMemoryValueStorage {
     reference_to_value: Mutex<BTreeMap<Reference, Arc<Value>>>,
 }
@@ -107,6 +115,17 @@ impl SQLiteStorage {
         connection
             .execute("CREATE INDEX reference_target ON reference (target)", ())
             .map(|size| assert_eq!(0, size))?;
+        connection
+            .execute(
+                "CREATE TABLE root (
+                id INTEGER PRIMARY KEY NOT NULL,
+                name TEXT UNIQUE NOT NULL,
+                target BLOB UNIQUE NOT NULL,
+                CONSTRAINT target_length_matches_sha3_512 CHECK (LENGTH(target) == 64)
+            ) STRICT",
+                (),
+            )
+            .map(|size| assert_eq!(0, size))?;
         Ok(())
     }
 }
@@ -157,12 +176,12 @@ impl LoadValue for SQLiteStorage {
             let serialized = row.get(1).unwrap(/*TODO*/);
             Ok((id, serialized))
          } ).unwrap(/*TODO*/);
-        let mut stmt = connection_locked.prepare("SELECT target FROM reference WHERE origin = ?").unwrap(/*TODO*/);
-        let person_iter = stmt.query_map([&id], |row| {
-        let target : [u8; 64] = row.get(0)?;
-        Ok(TypedReference::new(TypeId(0), Reference::new(BlobDigest::new(&target))))
-    }).unwrap(/*TODO*/);
-        let references: Vec<crate::tree::TypedReference> = person_iter
+        let mut statement = connection_locked.prepare("SELECT target FROM reference WHERE origin = ?").unwrap(/*TODO*/);
+        let results = statement.query_map([&id], |row| {
+            let target : [u8; 64] = row.get(0)?;
+            Ok(TypedReference::new(TypeId(0), Reference::new(BlobDigest::new(&target))))
+        }).unwrap(/*TODO*/);
+        let references: Vec<crate::tree::TypedReference> = results
             .map(|maybe_error| maybe_error.unwrap(/*YOLO*/))
             .collect();
         Some(Arc::new(Value::new(serialized, references)))
@@ -170,3 +189,28 @@ impl LoadValue for SQLiteStorage {
 }
 
 impl LoadStoreValue for SQLiteStorage {}
+
+impl UpdateRoot for SQLiteStorage {
+    fn update_root(&self, name: &str, target: &BlobDigest) {
+        let connection_locked = self.connection.lock().unwrap();
+        let target_array: [u8; 64] = (*target).into();
+        connection_locked.execute(
+            "INSERT INTO root (name, target) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET target = ?2;",
+            (&name, &target_array),
+        ).unwrap(/*TODO*/);
+    }
+}
+
+impl LoadRoot for SQLiteStorage {
+    fn load_root(&self, name: &str) -> Option<BlobDigest> {
+        use rusqlite::OptionalExtension;
+        let connection_locked = self.connection.lock().unwrap();
+        let maybe_target: Option<[u8; 64]> = connection_locked.query_row("SELECT target FROM root WHERE name = ?1", 
+        (&name, )       ,
+         |row| -> rusqlite::Result<_> {
+            let target = row.get(0).unwrap(/*TODO*/);
+            Ok(target)
+         } ).optional().unwrap(/*TODO*/);
+        maybe_target.map(|target| BlobDigest::new(&target))
+    }
+}
