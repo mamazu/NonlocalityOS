@@ -884,6 +884,7 @@ dependencies = [
  "relative-path",
  "reqwest_dav",
  "rusqlite",
+ "tempfile",
  "test-log",
  "tokio",
  "tracing",

@@ -20,9 +20,7 @@ async fn serve_connection(stream: TcpStream, dav_server: Arc<DavHandler>) {
         async move { Ok::<_, Infallible>(dav_server.handle(req).await) }
     };
     let io = TokioIo::new(stream);
-    // Finally, we bind the incoming connection to our `hello` service
     if let Err(err) = http1::Builder::new()
-        // `service_fn` converts our function in a `Service`
         .serve_connection(io, hyper::service::service_fn(make_service))
         .await
     {
@@ -65,6 +63,7 @@ async fn save_tree_regularly(
 }
 
 async fn run_dav_server(
+    listener: TcpListener,
     database_file_name: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let database_existed = std::fs::exists(&database_file_name).unwrap();
@@ -100,9 +99,6 @@ async fn run_dav_server(
             .locksystem(FakeLs::new())
             .build_handler(),
     );
-    let addr = SocketAddr::from(([127, 0, 0, 1], 4918));
-    let listener = TcpListener::bind(addr).await?;
-    println!("Serving on http://{}", addr);
     let (_, result) = tokio::join!(
         async move {
             save_tree_regularly(root, &root_name, &*blob_storage).await;
@@ -112,11 +108,75 @@ async fn run_dav_server(
     result
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::run_dav_server;
+    use reqwest_dav::{Auth, ClientBuilder, Depth};
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
+
+    #[test_log::test(tokio::test)]
+    async fn test_dav_server() {
+        let address = SocketAddr::from(([127, 0, 0, 1], 4919));
+        let listener = TcpListener::bind(address).await.unwrap();
+        let temporary_directory = tempfile::tempdir().unwrap();
+        let database_file_name = temporary_directory.path().join("dogbox_dav_server.sqlite");
+        let server_url = format!("http://{}", address);
+        let run_client = async {
+            let client = ClientBuilder::new()
+                .set_host(server_url)
+                .set_auth(Auth::Basic("username".to_owned(), "password".to_owned()))
+                .build()
+                .unwrap();
+            let error = client.get("/test.txt").await.unwrap_err();
+            match error {
+            reqwest_dav::Error::Reqwest(_)| reqwest_dav::Error::ReqwestDecode(_)| reqwest_dav::Error::MissingAuthContext => panic!("Unexpected error: {:?}", &error),
+            reqwest_dav::Error::Decode(decode) => match decode {
+                reqwest_dav::DecodeError::DigestAuth(_) => panic!(),
+                reqwest_dav::DecodeError::NoAuthHeaderInResponse => panic!(),
+                reqwest_dav::DecodeError::SerdeXml(_) => panic!(),
+                reqwest_dav::DecodeError::FieldNotSupported(_) => panic!(),
+                reqwest_dav::DecodeError::FieldNotFound(_) => panic!(),
+                reqwest_dav::DecodeError::StatusMismatched(_) => panic!(),
+                reqwest_dav::DecodeError::Server(server_error) =>
+                    assert_eq!("ServerError { response_code: 404, exception: \"server exception and parse error\", message: \"\" }",
+                        format!("{:?}", server_error)),
+            },
+        };
+
+            let listed = client.list("", Depth::Number(0)).await.unwrap();
+            assert_eq!(1, listed.len());
+            let entry = &listed[0];
+            match entry {
+                reqwest_dav::list_cmd::ListEntity::File(_) => panic!(),
+                reqwest_dav::list_cmd::ListEntity::Folder(folder) => {
+                    assert_eq!("/", folder.href);
+                    assert_eq!(None, folder.quota_used_bytes);
+                    assert_eq!(None, folder.quota_available_bytes);
+                    //TODO: check tag value
+                    assert_eq!(true, folder.tag.is_some());
+                    //TODO: check last modified
+                }
+            }
+        };
+        tokio::select! {
+            result = run_dav_server(listener, &database_file_name ) => {
+                panic!("Server isn't expected to exit: {:?}", result);
+            }
+            _ = run_client => {
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
+    let address = SocketAddr::from(([127, 0, 0, 1], 4918));
     let database_file_name = std::env::current_dir()
         .unwrap()
         .join("dogbox_dav_server.sqlite");
-    run_dav_server(&database_file_name).await
+    let listener = TcpListener::bind(address).await?;
+    println!("Serving on http://{}", address);
+    run_dav_server(listener, &database_file_name).await
 }
