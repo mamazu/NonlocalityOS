@@ -103,20 +103,20 @@ async fn run_dav_server(
     let addr = SocketAddr::from(([127, 0, 0, 1], 4918));
     let listener = TcpListener::bind(addr).await?;
     println!("Serving on http://{}", addr);
-    tokio::spawn(async move {
-        save_tree_regularly(root, &root_name, &*blob_storage).await;
-    });
-
-    handle_tcp_connections(listener, dav_server).await
+    let (_, result) = tokio::join!(
+        async move {
+            save_tree_regularly(root, &root_name, &*blob_storage).await;
+        },
+        handle_tcp_connections(listener, dav_server)
+    );
+    result
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
-
     let database_file_name = std::env::current_dir()
         .unwrap()
         .join("dogbox_dav_server.sqlite");
-
     run_dav_server(&database_file_name).await
 }
