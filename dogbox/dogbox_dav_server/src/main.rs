@@ -6,20 +6,34 @@ use hyper_util::rt::TokioIo;
 use std::{
     convert::Infallible,
     net::SocketAddr,
+    path::Path,
     sync::{Arc, Mutex},
 };
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 mod file_system;
 mod file_system_test;
 use file_system::DogBoxFileSystem;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing_subscriber::fmt::init();
+async fn serve_connection(stream: TcpStream, dav_server: Arc<DavHandler>) {
+    let make_service = move |req: Request<body::Incoming>| {
+        let dav_server = dav_server.clone();
+        async move { Ok::<_, Infallible>(dav_server.handle(req).await) }
+    };
 
-    let database_file_name = std::env::current_dir()
-        .unwrap()
-        .join("dogbox_dav_server.sqlite");
+    let io = TokioIo::new(stream);
+    // Finally, we bind the incoming connection to our `hello` service
+    if let Err(err) = http1::Builder::new()
+        // `service_fn` converts our function in a `Service`
+        .serve_connection(io, hyper::service::service_fn(make_service))
+        .await
+    {
+        eprintln!("Error serving connection: {:?}", err);
+    }
+}
+
+async fn run_dav_server(
+    database_file_name: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let database_existed = std::fs::exists(&database_file_name).unwrap();
     let sqlite_connection = rusqlite::Connection::open(&database_file_name)?;
     if !database_existed {
@@ -79,22 +93,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     loop {
         let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
         let dav_server = dav_server.clone();
-        tokio::task::spawn(async move {
-            let make_service = move |req: Request<body::Incoming>| {
-                let dav_server = dav_server.clone();
-                async move { Ok::<_, Infallible>(dav_server.handle(req).await) }
-            };
-
-            // Finally, we bind the incoming connection to our `hello` service
-            if let Err(err) = http1::Builder::new()
-                // `service_fn` converts our function in a `Service`
-                .serve_connection(io, hyper::service::service_fn(make_service))
-                .await
-            {
-                eprintln!("Error serving connection: {:?}", err);
-            }
-        });
+        tokio::task::spawn(async move { serve_connection(stream, dav_server).await });
     }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing_subscriber::fmt::init();
+
+    let database_file_name = std::env::current_dir()
+        .unwrap()
+        .join("dogbox_dav_server.sqlite");
+
+    run_dav_server(&database_file_name).await
 }
