@@ -198,22 +198,33 @@ mod tests {
         test_fresh_dav_server(run_client).await
     }
 
-    #[test_log::test(tokio::test)]
-    async fn test_create_file() {
-        let run_client = |server_url| -> Pin<Box<dyn Future<Output = ()>>> {
-            Box::pin(async {
+    async fn test_create_file(content: Vec<u8>) {
+        let run_client = move |server_url| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
                 let client = create_client(server_url);
-                let content: Vec<u8> = vec![];
                 let size = content.len() as i64;
                 let file_name = "test.txt";
-                client.put(file_name, content).await.unwrap();
+                client.put(file_name, content.clone()).await.unwrap();
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(2, listed.len());
                 expect_directory(&listed[0], "/");
                 expect_file(&listed[1], &format!("/{}", file_name), size);
+                let response = client.get(&file_name).await.unwrap();
+                let response_content = response.bytes().await.unwrap().to_vec();
+                assert_eq!(content, response_content);
             })
         };
         test_fresh_dav_server(run_client).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_create_file_empty() {
+        test_create_file(vec![]).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_create_file_with_content() {
+        test_create_file(vec![b'a']).await
     }
 }
 
