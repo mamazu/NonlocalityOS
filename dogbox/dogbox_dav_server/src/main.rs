@@ -112,60 +112,67 @@ async fn run_dav_server(
 mod tests {
     use crate::run_dav_server;
     use reqwest_dav::{Auth, ClientBuilder, Depth};
-    use std::net::SocketAddr;
+    use std::{future::Future, net::SocketAddr, pin::Pin};
     use tokio::net::TcpListener;
 
-    #[test_log::test(tokio::test)]
-    async fn test_dav_server() {
+    async fn test_fresh_dav_server(
+        run_client: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>>,
+    ) {
         let address = SocketAddr::from(([127, 0, 0, 1], 4919));
         let listener = TcpListener::bind(address).await.unwrap();
         let temporary_directory = tempfile::tempdir().unwrap();
         let database_file_name = temporary_directory.path().join("dogbox_dav_server.sqlite");
         let server_url = format!("http://{}", address);
-        let run_client = async {
-            let client = ClientBuilder::new()
-                .set_host(server_url)
-                .set_auth(Auth::Basic("username".to_owned(), "password".to_owned()))
-                .build()
-                .unwrap();
-            let error = client.get("/test.txt").await.unwrap_err();
-            match error {
-            reqwest_dav::Error::Reqwest(_)| reqwest_dav::Error::ReqwestDecode(_)| reqwest_dav::Error::MissingAuthContext => panic!("Unexpected error: {:?}", &error),
-            reqwest_dav::Error::Decode(decode) => match decode {
-                reqwest_dav::DecodeError::DigestAuth(_) => panic!(),
-                reqwest_dav::DecodeError::NoAuthHeaderInResponse => panic!(),
-                reqwest_dav::DecodeError::SerdeXml(_) => panic!(),
-                reqwest_dav::DecodeError::FieldNotSupported(_) => panic!(),
-                reqwest_dav::DecodeError::FieldNotFound(_) => panic!(),
-                reqwest_dav::DecodeError::StatusMismatched(_) => panic!(),
-                reqwest_dav::DecodeError::Server(server_error) =>
-                    assert_eq!("ServerError { response_code: 404, exception: \"server exception and parse error\", message: \"\" }",
-                        format!("{:?}", server_error)),
-            },
-        };
-
-            let listed = client.list("", Depth::Number(0)).await.unwrap();
-            assert_eq!(1, listed.len());
-            let entry = &listed[0];
-            match entry {
-                reqwest_dav::list_cmd::ListEntity::File(_) => panic!(),
-                reqwest_dav::list_cmd::ListEntity::Folder(folder) => {
-                    assert_eq!("/", folder.href);
-                    assert_eq!(None, folder.quota_used_bytes);
-                    assert_eq!(None, folder.quota_available_bytes);
-                    //TODO: check tag value
-                    assert_eq!(true, folder.tag.is_some());
-                    //TODO: check last modified
-                }
-            }
-        };
         tokio::select! {
             result = run_dav_server(listener, &database_file_name ) => {
                 panic!("Server isn't expected to exit: {:?}", result);
             }
-            _ = run_client => {
+            _ = run_client(server_url) => {
             }
         }
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_file_not_found() {
+        let run_client = |server_url| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async {
+                let client = ClientBuilder::new()
+                    .set_host(server_url)
+                    .set_auth(Auth::Basic("username".to_owned(), "password".to_owned()))
+                    .build()
+                    .unwrap();
+                let error = client.get("/test.txt").await.unwrap_err();
+                match error {
+                    reqwest_dav::Error::Reqwest(_) | reqwest_dav::Error::ReqwestDecode(_) | reqwest_dav::Error::MissingAuthContext => panic!("Unexpected error: {:?}", &error),
+                    reqwest_dav::Error::Decode(decode) => match decode {
+                        reqwest_dav::DecodeError::DigestAuth(_) => panic!(),
+                        reqwest_dav::DecodeError::NoAuthHeaderInResponse => panic!(),
+                        reqwest_dav::DecodeError::SerdeXml(_) => panic!(),
+                        reqwest_dav::DecodeError::FieldNotSupported(_) => panic!(),
+                        reqwest_dav::DecodeError::FieldNotFound(_) => panic!(),
+                        reqwest_dav::DecodeError::StatusMismatched(_) => panic!(),
+                        reqwest_dav::DecodeError::Server(server_error) =>
+                            assert_eq!("ServerError { response_code: 404, exception: \"server exception and parse error\", message: \"\" }",
+                                format!("{:?}", server_error)),
+                    },
+                };
+                let listed = client.list("", Depth::Number(0)).await.unwrap();
+                assert_eq!(1, listed.len());
+                let entry = &listed[0];
+                match entry {
+                    reqwest_dav::list_cmd::ListEntity::File(_) => panic!(),
+                    reqwest_dav::list_cmd::ListEntity::Folder(folder) => {
+                        assert_eq!("/", folder.href);
+                        assert_eq!(None, folder.quota_used_bytes);
+                        assert_eq!(None, folder.quota_available_bytes);
+                        //TODO: check tag value
+                        assert_eq!(true, folder.tag.is_some());
+                        //TODO: check last modified
+                    }
+                }
+            })
+        };
+        test_fresh_dav_server(run_client).await
     }
 }
 
