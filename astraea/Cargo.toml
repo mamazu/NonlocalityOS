@@ -18,4 +18,9 @@ serde = "1"
 postcard = {version = "1", features = ["alloc"]}
 lazy_static = "1"
 tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rusqlite = {version = "0", features = ["bundled-sqlcipher"]}
+
+[target.'cfg(target_os = "windows")'.dependencies]
 rusqlite = {version = "0", features = ["bundled-sqlcipher-vendored-openssl"]}
