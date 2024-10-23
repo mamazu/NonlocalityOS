@@ -159,4 +159,19 @@ mod tests {
         storage.update_root(name, &reference_2.digest);
         assert_eq!(Some(reference_2.digest), storage.load_root(name));
     }
+
+    #[test]
+    fn test_roots_may_be_equal() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        SQLiteStorage::create_schema(&connection).unwrap();
+        let storage = SQLiteStorage::new(Mutex::new(connection));
+        let reference_1 = storage.store_value(Arc::new(Value::from_unit())).unwrap();
+        let name_1 = "testA";
+        let name_2 = "testB";
+        assert_eq!(None, storage.load_root(name_1));
+        storage.update_root(name_1, &reference_1.digest);
+        assert_eq!(Some(reference_1.digest), storage.load_root(name_1));
+        storage.update_root(name_2, &reference_1.digest);
+        assert_eq!(Some(reference_1.digest), storage.load_root(name_1));
+    }
 }

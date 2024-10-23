@@ -120,7 +120,7 @@ impl SQLiteStorage {
                 "CREATE TABLE root (
                 id INTEGER PRIMARY KEY NOT NULL,
                 name TEXT UNIQUE NOT NULL,
-                target BLOB UNIQUE NOT NULL,
+                target BLOB NOT NULL,
                 CONSTRAINT target_length_matches_sha3_512 CHECK (LENGTH(target) == 64)
             ) STRICT",
                 (),
