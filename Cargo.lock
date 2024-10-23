@@ -919,6 +919,7 @@ dependencies = [
  "postcard",
  "relative-path",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

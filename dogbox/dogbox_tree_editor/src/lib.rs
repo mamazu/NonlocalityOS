@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::Mutex;
+use tracing::info;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Error {
@@ -187,6 +188,7 @@ impl OpenDirectory {
             },
             None => {
                 let open_file = Arc::new(OpenFile::new(vec![], true, self.storage.clone()));
+                info!("Adding file {} to the directory", &name);
                 names_locked.insert(
                     name.to_string(),
                     NamedEntry::OpenRegularFile(open_file.clone()),

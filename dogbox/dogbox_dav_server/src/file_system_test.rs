@@ -80,7 +80,7 @@ mod tests {
                 },
             };
 
-            let listed = client.list("", Depth::Number(0)).await.unwrap();
+            let listed = client.list("", Depth::Number(1)).await.unwrap();
             assert_eq!(1, listed.len());
             let entry = &listed[0];
             match entry {

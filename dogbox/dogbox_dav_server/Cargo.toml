@@ -28,4 +28,4 @@ rusqlite = {version = "0", features = ["bundled-sqlcipher-vendored-openssl"]}
 
 [dev-dependencies]
 reqwest_dav = "0"
-test-log = "0"
+test-log = {version = "0", features = ["trace", "log", "color"]}
