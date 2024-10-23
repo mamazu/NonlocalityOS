@@ -111,7 +111,7 @@ async fn run_dav_server(
 #[cfg(test)]
 mod tests {
     use crate::run_dav_server;
-    use reqwest_dav::{Auth, Client, ClientBuilder, Depth};
+    use reqwest_dav::{list_cmd::ListEntity, Auth, Client, ClientBuilder, Depth};
     use std::{future::Future, net::SocketAddr, pin::Pin};
     use tokio::net::TcpListener;
 
@@ -142,6 +142,34 @@ mod tests {
         client
     }
 
+    fn expect_directory(entity: &ListEntity, name: &str) {
+        match entity {
+            reqwest_dav::list_cmd::ListEntity::File(_) => panic!(),
+            reqwest_dav::list_cmd::ListEntity::Folder(folder) => {
+                assert_eq!(name, folder.href);
+                assert_eq!(None, folder.quota_used_bytes);
+                assert_eq!(None, folder.quota_available_bytes);
+                //TODO: check tag value
+                assert_eq!(true, folder.tag.is_some());
+                //TODO: check last modified
+            }
+        }
+    }
+
+    fn expect_file(entity: &ListEntity, name: &str, size: i64) {
+        match entity {
+            reqwest_dav::list_cmd::ListEntity::File(file) => {
+                assert_eq!(name, file.href);
+                assert_eq!(size, file.content_length);
+                assert_eq!("text/plain", file.content_type);
+                //TODO: check tag value
+                assert_eq!(true, file.tag.is_some());
+                //TODO: check last modified
+            }
+            reqwest_dav::list_cmd::ListEntity::Folder(_folder) => panic!(),
+        }
+    }
+
     #[test_log::test(tokio::test)]
     async fn test_file_not_found() {
         let run_client = |server_url| -> Pin<Box<dyn Future<Output = ()>>> {
@@ -164,18 +192,7 @@ mod tests {
                 };
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(1, listed.len());
-                let entry = &listed[0];
-                match entry {
-                    reqwest_dav::list_cmd::ListEntity::File(_) => panic!(),
-                    reqwest_dav::list_cmd::ListEntity::Folder(folder) => {
-                        assert_eq!("/", folder.href);
-                        assert_eq!(None, folder.quota_used_bytes);
-                        assert_eq!(None, folder.quota_available_bytes);
-                        //TODO: check tag value
-                        assert_eq!(true, folder.tag.is_some());
-                        //TODO: check last modified
-                    }
-                }
+                expect_directory(&listed[0], "/");
             })
         };
         test_fresh_dav_server(run_client).await
@@ -187,32 +204,13 @@ mod tests {
             Box::pin(async {
                 let client = create_client(server_url);
                 let content: Vec<u8> = vec![];
+                let size = content.len() as i64;
                 let file_name = "test.txt";
                 client.put(file_name, content).await.unwrap();
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(2, listed.len());
-                match &listed[0] {
-                    reqwest_dav::list_cmd::ListEntity::File(_) => panic!(),
-                    reqwest_dav::list_cmd::ListEntity::Folder(folder) => {
-                        assert_eq!("/", folder.href);
-                        assert_eq!(None, folder.quota_used_bytes);
-                        assert_eq!(None, folder.quota_available_bytes);
-                        //TODO: check tag value
-                        assert_eq!(true, folder.tag.is_some());
-                        //TODO: check last modified
-                    }
-                }
-                match &listed[1] {
-                    reqwest_dav::list_cmd::ListEntity::File(file) => {
-                        assert_eq!(format!("/{}", file_name), file.href);
-                        assert_eq!(0, file.content_length);
-                        assert_eq!("text/plain", file.content_type);
-                        //TODO: check tag value
-                        assert_eq!(true, file.tag.is_some());
-                        //TODO: check last modified
-                    }
-                    reqwest_dav::list_cmd::ListEntity::Folder(_folder) => panic!(),
-                }
+                expect_directory(&listed[0], "/");
+                expect_file(&listed[1], &format!("/{}", file_name), size);
             })
         };
         test_fresh_dav_server(run_client).await
