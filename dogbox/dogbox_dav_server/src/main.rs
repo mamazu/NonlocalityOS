@@ -1,6 +1,6 @@
-use astraea::{storage::SQLiteStorage, tree::BlobDigest};
+use astraea::storage::{LoadRoot, SQLiteStorage, UpdateRoot};
 use dav_server::{fakels::FakeLs, DavHandler};
-use dogbox_tree_editor::{DirectoryEntry, DirectoryEntryKind, OpenDirectory};
+use dogbox_tree_editor::OpenDirectory;
 use hyper::{body, server::conn::http1, Request};
 use hyper_util::rt::TokioIo;
 use std::{
@@ -38,14 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     let blob_storage = Arc::new(SQLiteStorage::new(Mutex::new(sqlite_connection)));
-    let root = Arc::new(OpenDirectory::from_entries(
-        vec![DirectoryEntry {
-            name: "example.txt".to_string(),
-            kind: DirectoryEntryKind::File(0),
-            digest: BlobDigest::hash(b""),
-        }],
-        blob_storage,
-    ));
+    let root_name = "latest";
+    let root = match blob_storage.load_root(&root_name) {
+        Some(found) => {
+            OpenDirectory::load_directory(blob_storage.clone(), &found).await.unwrap(/*TODO*/)
+        }
+        None => Arc::new(OpenDirectory::from_entries(vec![], blob_storage.clone())),
+    };
     let dav_server = Arc::new(
         DavHandler::builder()
             .filesystem(Box::new(DogBoxFileSystem::new(
@@ -67,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(root_digest) => {
                     if previous_root_digest != Some(root_digest) {
                         println!("Root digest changed: {:?}", &root_digest);
+                        blob_storage.update_root(root_name, &root_digest);
                         previous_root_digest = Some(root_digest);
                     }
                 }

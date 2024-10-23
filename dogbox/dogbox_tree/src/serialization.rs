@@ -152,6 +152,12 @@ impl TryFrom<&str> for FileName {
     }
 }
 
+impl Into<String> for FileName {
+    fn into(self) -> String {
+        self.content.0
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum DirectoryEntryKind {
     Directory,

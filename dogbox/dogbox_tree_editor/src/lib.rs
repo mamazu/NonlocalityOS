@@ -17,6 +17,8 @@ pub enum Error {
     NotFound,
     CannotOpenRegularFileAsDirectory,
     CannotOpenDirectoryAsRegularFile,
+    Postcard(postcard::Error),
+    ReferenceIndexOutOfRange,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -194,16 +196,53 @@ impl OpenDirectory {
         }
     }
 
+    pub async fn load_directory(
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+        digest: &BlobDigest,
+    ) -> Result<Arc<OpenDirectory>> {
+        match storage.load_value(&Reference::new(*digest)) {
+            Some(loaded) => {
+                let parsed_directory: DirectoryTree = match postcard::from_bytes(&loaded.serialized)
+                {
+                    Ok(success) => success,
+                    Err(error) => return Err(Error::Postcard(error)),
+                };
+                let mut entries = vec![];
+                entries.reserve(parsed_directory.children.len());
+                for maybe_entry in parsed_directory.children.iter().map(|child| {
+                    let kind = match child.1.kind {
+                        serialization::DirectoryEntryKind::Directory => {
+                            DirectoryEntryKind::Directory
+                        }
+                        serialization::DirectoryEntryKind::File(size) => {
+                            DirectoryEntryKind::File(size)
+                        }
+                    };
+                    let index: usize = usize::try_from(child.1.digest.0)
+                        .map_err(|_error| Error::ReferenceIndexOutOfRange)?;
+                    if index >= loaded.references.len() {
+                        return Err(Error::ReferenceIndexOutOfRange);
+                    }
+                    let digest = loaded.references[index].reference.digest;
+                    Ok(DirectoryEntry::new(child.0.clone().into(), kind, digest))
+                }) {
+                    let entry = maybe_entry?;
+                    entries.push(entry);
+                }
+                Ok(Arc::new(OpenDirectory::from_entries(entries, storage)))
+            }
+            None => todo!(),
+        }
+    }
+
     async fn open_subdirectory(&self, name: String) -> Result<Arc<OpenDirectory>> {
         let mut names_locked = self.names.lock().await;
         match names_locked.get_mut(&name) {
             Some(found) => match found {
-                NamedEntry::NotOpen(kind, _digest) => match kind {
+                NamedEntry::NotOpen(kind, digest) => match kind {
                     DirectoryEntryKind::Directory => {
-                        let subdirectory = Arc::new(OpenDirectory {
-                            names: tokio::sync::Mutex::new(BTreeMap::new()),
-                            storage: self.storage.clone(),
-                        });
+                        let subdirectory =
+                            Self::load_directory(self.storage.clone(), digest).await?;
                         *found = NamedEntry::OpenSubdirectory(subdirectory.clone());
                         Ok(subdirectory)
                     }

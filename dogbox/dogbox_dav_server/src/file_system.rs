@@ -135,6 +135,8 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
                     dogbox_tree_editor::Error::NotFound => todo!(),
                     dogbox_tree_editor::Error::CannotOpenRegularFileAsDirectory => todo!(),
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
+                    dogbox_tree_editor::Error::Postcard(_error) => todo!(),
+                    dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                 },
             }
         })
@@ -151,6 +153,8 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
                     dogbox_tree_editor::Error::NotFound => todo!(),
                     dogbox_tree_editor::Error::CannotOpenRegularFileAsDirectory => todo!(),
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
+                    dogbox_tree_editor::Error::Postcard(_error) => todo!(),
+                    dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                 },
             }
         })
@@ -233,6 +237,8 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                         return Err(dav_server::fs::FsError::NotImplemented);
                     }
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
+                    dogbox_tree_editor::Error::Postcard(_error) => todo!(),
+                    dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                 },
             };
             Ok(Box::pin(stream! {
@@ -274,6 +280,8 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                         return Err(dav_server::fs::FsError::NotImplemented);
                     }
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
+                    dogbox_tree_editor::Error::Postcard(_error) => todo!(),
+                    dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                 },
             }
         })
@@ -312,6 +320,8 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                         return Err(dav_server::fs::FsError::NotImplemented);
                     }
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
+                    dogbox_tree_editor::Error::Postcard(_error) => todo!(),
+                    dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                 },
             }
         })
