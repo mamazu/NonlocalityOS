@@ -19,7 +19,6 @@ async fn serve_connection(stream: TcpStream, dav_server: Arc<DavHandler>) {
         let dav_server = dav_server.clone();
         async move { Ok::<_, Infallible>(dav_server.handle(req).await) }
     };
-
     let io = TokioIo::new(stream);
     // Finally, we bind the incoming connection to our `hello` service
     if let Err(err) = http1::Builder::new()
@@ -28,6 +27,40 @@ async fn serve_connection(stream: TcpStream, dav_server: Arc<DavHandler>) {
         .await
     {
         eprintln!("Error serving connection: {:?}", err);
+    }
+}
+
+async fn handle_tcp_connections(
+    listener: TcpListener,
+    dav_server: Arc<DavHandler>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let dav_server = dav_server.clone();
+        tokio::task::spawn(async move { serve_connection(stream, dav_server).await });
+    }
+}
+
+async fn save_tree_regularly(
+    root: Arc<OpenDirectory>,
+    root_name: &str,
+    blob_storage: &(dyn UpdateRoot + Sync),
+) {
+    let mut previous_root_digest = None;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        match root.poll_status().await {
+            Ok(root_digest) => {
+                if previous_root_digest != Some(root_digest) {
+                    println!("Root digest changed: {:?}", &root_digest);
+                    blob_storage.update_root(root_name, &root_digest);
+                    previous_root_digest = Some(root_digest);
+                }
+            }
+            Err(error) => {
+                println!("Could not poll root status: {:?}", &error);
+            }
+        }
     }
 }
 
@@ -67,35 +100,14 @@ async fn run_dav_server(
             .locksystem(FakeLs::new())
             .build_handler(),
     );
-
     let addr = SocketAddr::from(([127, 0, 0, 1], 4918));
     let listener = TcpListener::bind(addr).await?;
     println!("Serving on http://{}", addr);
-
     tokio::spawn(async move {
-        let mut previous_root_digest = None;
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            match root.poll_status().await {
-                Ok(root_digest) => {
-                    if previous_root_digest != Some(root_digest) {
-                        println!("Root digest changed: {:?}", &root_digest);
-                        blob_storage.update_root(root_name, &root_digest);
-                        previous_root_digest = Some(root_digest);
-                    }
-                }
-                Err(error) => {
-                    println!("Could not poll root status: {:?}", &error);
-                }
-            }
-        }
+        save_tree_regularly(root, &root_name, &*blob_storage).await;
     });
 
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let dav_server = dav_server.clone();
-        tokio::task::spawn(async move { serve_connection(stream, dav_server).await });
-    }
+    handle_tcp_connections(listener, dav_server).await
 }
 
 #[tokio::main]
