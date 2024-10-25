@@ -7,6 +7,7 @@ use std::{
     convert::Infallible,
     net::SocketAddr,
     path::Path,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 use tokio::net::{TcpListener, TcpStream};
@@ -39,10 +40,17 @@ async fn handle_tcp_connections(
     }
 }
 
+#[derive(Debug)]
+enum SaveStatus {
+    Saved,
+    Saving,
+}
+
 async fn save_tree_regularly(
     root: Arc<OpenDirectory>,
     root_name: &str,
     blob_storage: &(dyn UpdateRoot + Sync),
+    save_status_sender: tokio::sync::watch::Sender<SaveStatus>,
 ) {
     let mut previous_root_status: Option<OpenDirectoryStatus> = None;
     loop {
@@ -52,6 +60,12 @@ async fn save_tree_regularly(
                 if previous_root_status.as_ref() != Some(&root_status) {
                     println!("Root changed: {:?}", &root_status);
                     blob_storage.update_root(root_name, &root_status.digest);
+                    save_status_sender
+                        .send(match root_status.files_open_for_writing_count {
+                            0 => SaveStatus::Saved,
+                            _ => SaveStatus::Saving,
+                        })
+                        .unwrap();
                     previous_root_status = Some(root_status);
                 }
             }
@@ -73,7 +87,19 @@ async fn save_tree_regularly(
 async fn run_dav_server(
     listener: TcpListener,
     database_file_name: &Path,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<
+    (
+        tokio::sync::watch::Receiver<SaveStatus>,
+        Pin<
+            Box<
+                dyn std::future::Future<
+                    Output = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>,
+                >,
+            >,
+        >,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let database_existed = std::fs::exists(&database_file_name).unwrap();
     let sqlite_connection = rusqlite::Connection::open(&database_file_name)?;
     if !database_existed {
@@ -107,13 +133,17 @@ async fn run_dav_server(
             .locksystem(FakeLs::new())
             .build_handler(),
     );
-    let (_, result) = tokio::join!(
-        async move {
-            save_tree_regularly(root, &root_name, &*blob_storage).await;
-        },
-        handle_tcp_connections(listener, dav_server)
-    );
-    result
+    let (save_status_sender, save_status_receiver) = tokio::sync::watch::channel(SaveStatus::Saved);
+    let result = async move {
+        tokio::join!(
+            async move {
+                save_tree_regularly(root, &root_name, &*blob_storage, save_status_sender).await;
+            },
+            handle_tcp_connections(listener, dav_server)
+        )
+        .1
+    };
+    Ok((save_status_receiver, Box::pin(result)))
 }
 
 #[cfg(test)]
@@ -132,12 +162,21 @@ mod tests {
         let temporary_directory = tempfile::tempdir().unwrap();
         let database_file_name = temporary_directory.path().join("dogbox_dav_server.sqlite");
         let server_url = format!("http://{}", actual_address);
+        let (mut save_status_receiver, server) =
+            run_dav_server(listener, &database_file_name).await.unwrap();
         tokio::select! {
-            result = run_dav_server(listener, &database_file_name) => {
+            result = server => {
                 panic!("Server isn't expected to exit: {:?}", result);
             }
             _ = run_client(server_url) => {
             }
+        };
+        loop {
+            match *save_status_receiver.borrow_and_update() {
+                crate::SaveStatus::Saved => break,
+                crate::SaveStatus::Saving => {}
+            }
+            save_status_receiver.changed().await.unwrap();
         }
     }
 
@@ -245,5 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .join("dogbox_dav_server.sqlite");
     let listener = TcpListener::bind(address).await?;
     println!("Serving on http://{}", address);
-    run_dav_server(listener, &database_file_name).await
+    let (_save_status_receiver, server) = run_dav_server(listener, &database_file_name).await?;
+    server.await?;
+    Ok(())
 }
