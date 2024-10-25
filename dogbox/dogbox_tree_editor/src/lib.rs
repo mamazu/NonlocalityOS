@@ -5,6 +5,7 @@ use astraea::{
 use async_stream::stream;
 use bytes::Buf;
 use dogbox_tree::serialization::{self, DirectoryTree, FileName};
+use futures::FutureExt;
 use std::{
     collections::{BTreeMap, VecDeque},
     pin::Pin,
@@ -57,6 +58,16 @@ impl MutableDirectoryEntry {
     }
 }
 
+pub enum OpenNamedEntryStatus {
+    Directory(OpenDirectoryStatus),
+    File(OpenFileStatus),
+}
+
+pub enum NamedEntryStatus {
+    Closed(serialization::DirectoryEntryKind, BlobDigest),
+    Open(OpenNamedEntryStatus),
+}
+
 #[derive(Clone, Debug)]
 pub enum NamedEntry {
     NotOpen(DirectoryEntryKind, BlobDigest),
@@ -73,22 +84,15 @@ impl NamedEntry {
         }
     }
 
-    fn poll_status<'t>(
-        &'t self,
-    ) -> Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = std::result::Result<
-                        (serialization::DirectoryEntryKind, BlobDigest),
-                        StoreError,
-                    >,
-                > + Send
-                + 't,
-        >,
-    > {
+    async fn wait_for_next_change(
+        &self,
+    ) -> (
+        std::result::Result<NamedEntryStatus, StoreError>,
+        Pin<Box<dyn std::future::Future<Output = std::result::Result<(), StoreError>> + Send>>,
+    ) {
         match self {
-            NamedEntry::NotOpen(directory_entry_kind, blob_digest) => {
-                Box::pin(std::future::ready(Ok((
+            NamedEntry::NotOpen(directory_entry_kind, blob_digest) => (
+                Ok(NamedEntryStatus::Closed(
                     match *directory_entry_kind {
                         DirectoryEntryKind::Directory => {
                             serialization::DirectoryEntryKind::Directory
@@ -98,19 +102,61 @@ impl NamedEntry {
                         }
                     },
                     *blob_digest,
-                ))))
+                )),
+                Box::pin(std::future::ready(Ok(()))),
+            ),
+            NamedEntry::OpenRegularFile(open_file) => {
+                let (maybe_open_file_status, change_event_future) =
+                    open_file.wait_for_next_change().await;
+                (
+                    maybe_open_file_status.map(|open_file_status| {
+                        NamedEntryStatus::Open(OpenNamedEntryStatus::File(open_file_status))
+                    }),
+                    Box::pin(change_event_future.map(|success| Ok(success))),
+                )
             }
-            NamedEntry::OpenRegularFile(open_file) => Box::pin(async move {
-                let open_file_status = open_file.poll_status().await?;
-                Ok((
-                    serialization::DirectoryEntryKind::File(open_file_status.size),
-                    open_file_status.content,
-                ))
-            }),
-            NamedEntry::OpenSubdirectory(directory) => Box::pin(async move {
-                let committed = directory.poll_status().await?;
-                Ok((serialization::DirectoryEntryKind::Directory, committed))
-            }),
+            NamedEntry::OpenSubdirectory(directory) => {
+                let (maybe_open_directory_status, change_event_future) =
+                    directory.wait_for_next_change().await;
+                (
+                    maybe_open_directory_status.map(|open_directory_status| {
+                        NamedEntryStatus::Open(OpenNamedEntryStatus::Directory(
+                            open_directory_status,
+                        ))
+                    }),
+                    change_event_future,
+                )
+            }
+        }
+    }
+}
+
+#[derive(PartialEq, Debug)]
+pub struct OpenDirectoryStatus {
+    pub digest: BlobDigest,
+    pub directories_open_count: usize,
+    pub files_open_count: usize,
+    pub files_open_for_writing_count: usize,
+    pub files_unflushed_count: usize,
+    pub bytes_unflushed_count: u64,
+}
+
+impl OpenDirectoryStatus {
+    pub fn new(
+        digest: BlobDigest,
+        directories_open_count: usize,
+        files_open_count: usize,
+        files_open_for_writing_count: usize,
+        files_unflushed_count: usize,
+        bytes_unflushed_count: u64,
+    ) -> Self {
+        Self {
+            digest,
+            directories_open_count,
+            files_open_count,
+            files_open_for_writing_count,
+            files_unflushed_count,
+            bytes_unflushed_count,
         }
     }
 }
@@ -120,6 +166,8 @@ pub struct OpenDirectory {
     // TODO: support really big directories. We may not be able to hold all entries in memory at the same time.
     names: tokio::sync::Mutex<BTreeMap<String, NamedEntry>>,
     storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    change_event_sender: tokio::sync::watch::Sender<()>,
+    change_event_receiver: tokio::sync::watch::Receiver<()>,
 }
 
 impl OpenDirectory {
@@ -127,7 +175,13 @@ impl OpenDirectory {
         names: tokio::sync::Mutex<BTreeMap<String, NamedEntry>>,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     ) -> Self {
-        Self { names, storage }
+        let (change_event_sender, change_event_receiver) = tokio::sync::watch::channel(());
+        Self {
+            names,
+            storage,
+            change_event_sender,
+            change_event_receiver,
+        }
     }
 
     pub fn from_entries(
@@ -140,10 +194,7 @@ impl OpenDirectory {
                 NamedEntry::NotOpen(entry.kind.clone(), entry.digest),
             )
         }));
-        OpenDirectory {
-            names: tokio::sync::Mutex::new(names),
-            storage: storage.clone(),
-        }
+        OpenDirectory::new(tokio::sync::Mutex::new(names), storage.clone())
     }
 
     async fn read(&self) -> Stream<MutableDirectoryEntry> {
@@ -180,6 +231,7 @@ impl OpenDirectory {
                         let open_file =
                             Arc::new(OpenFile::new(vec![], false, self.storage.clone()));
                         *found = NamedEntry::OpenRegularFile(open_file.clone());
+                        self.change_event_sender.send(()).unwrap();
                         Ok(open_file)
                     }
                 },
@@ -246,6 +298,7 @@ impl OpenDirectory {
                         let subdirectory =
                             Self::load_directory(self.storage.clone(), digest).await?;
                         *found = NamedEntry::OpenSubdirectory(subdirectory.clone());
+                        self.change_event_sender.send(()).unwrap();
                         Ok(subdirectory)
                     }
                     DirectoryEntryKind::File(_) => Err(Error::CannotOpenRegularFileAsDirectory),
@@ -283,37 +336,145 @@ impl OpenDirectory {
                         self.storage.clone(),
                     ))),
                 );
+                self.change_event_sender.send(()).unwrap();
                 Ok(())
             }
         }
     }
 
-    pub async fn poll_status(&self) -> std::result::Result<BlobDigest, StoreError> {
-        let names_locked = self.names.lock().await;
-        let mut children = std::collections::BTreeMap::new();
-        let mut references = Vec::new();
-        for entry in names_locked.iter() {
-            let name = FileName::try_from(entry.0.as_str()).unwrap();
-            let (kind, digest) = entry.1.poll_status().await?;
-            let reference_index = ReferenceIndex(references.len() as u64);
-            references.push(TypedReference::new(
-                TypeId(/*TODO get rid of this ID*/ 0),
-                Reference::new(digest),
-            ));
-            children.insert(
-                name,
-                serialization::DirectoryEntry {
-                    kind: kind,
-                    digest: reference_index,
-                },
-            );
-        }
-        let tree = DirectoryTree { children };
-        let serialized = postcard::to_allocvec(&tree).unwrap();
-        let reference = self
-            .storage
-            .store_value(Arc::new(Value::new(serialized, references)))?;
-        Ok(reference.digest)
+    pub fn wait_for_next_change<'t>(
+        &'t self,
+    ) -> Pin<
+        Box<
+            (dyn std::future::Future<
+                Output = (
+                    std::result::Result<OpenDirectoryStatus, StoreError>,
+                    Pin<
+                        Box<
+                            (dyn std::future::Future<Output = std::result::Result<(), StoreError>>
+                                 + Send),
+                        >,
+                    >,
+                ),
+            > + Send
+                 + 't),
+        >,
+    > {
+        Box::pin(async move {
+            let names_locked = self.names.lock().await;
+            let mut children = std::collections::BTreeMap::new();
+            let mut references = Vec::new();
+            let mut futures: Vec<
+                Pin<
+                    Box<
+                        dyn std::future::Future<Output = std::result::Result<(), StoreError>>
+                            + Send,
+                    >,
+                >,
+            > = vec![];
+            let mut directories_open_count: usize=/*count self*/ 1;
+            let mut files_open_count: usize = 0;
+            let mut files_open_for_writing_count: usize = 0;
+            let mut files_unflushed_count: usize = 0;
+            let mut bytes_unflushed_count: u64 = 0;
+            let mut receiver = self.change_event_receiver.clone();
+            futures.push(Box::pin(async move {
+                receiver.changed().await.unwrap();
+                Ok(())
+            }));
+            let mut store_error: Option<StoreError> = None;
+            for entry in names_locked.iter() {
+                let name = FileName::try_from(entry.0.as_str()).unwrap();
+                let (maybe_named_entry_status, next_change_future) =
+                    entry.1.wait_for_next_change().await;
+                let named_entry_status = match maybe_named_entry_status {
+                    Ok(success) => success,
+                    Err(error) => {
+                        store_error = Some(error);
+                        break;
+                    }
+                };
+                futures.push(next_change_future);
+                let (kind, digest) = match named_entry_status {
+                    NamedEntryStatus::Closed(directory_entry_kind, blob_digest) => {
+                        (directory_entry_kind, blob_digest)
+                    }
+                    NamedEntryStatus::Open(open_named_entry_status) => {
+                        match open_named_entry_status {
+                            OpenNamedEntryStatus::Directory(open_directory_status) => {
+                                directories_open_count +=
+                                    open_directory_status.directories_open_count;
+                                files_open_count += open_directory_status.files_open_count;
+                                files_open_for_writing_count =
+                                    open_directory_status.files_open_for_writing_count;
+                                files_unflushed_count +=
+                                    open_directory_status.files_unflushed_count;
+                                bytes_unflushed_count +=
+                                    open_directory_status.bytes_unflushed_count;
+                                (
+                                    serialization::DirectoryEntryKind::Directory,
+                                    open_directory_status.digest,
+                                )
+                            }
+                            OpenNamedEntryStatus::File(open_file_status) => {
+                                files_open_count += 1;
+                                if open_file_status.is_writeable {
+                                    files_open_for_writing_count += 1;
+                                }
+                                if open_file_status.bytes_unflushed_count > 0 {
+                                    files_unflushed_count += 1;
+                                }
+                                bytes_unflushed_count += open_file_status.bytes_unflushed_count;
+                                (
+                                    serialization::DirectoryEntryKind::File(open_file_status.size),
+                                    open_file_status.digest,
+                                )
+                            }
+                        }
+                    }
+                };
+                let reference_index = ReferenceIndex(references.len() as u64);
+                references.push(TypedReference::new(
+                    TypeId(/*TODO get rid of this ID*/ 0),
+                    Reference::new(digest),
+                ));
+                children.insert(
+                    name,
+                    serialization::DirectoryEntry {
+                        kind: kind,
+                        digest: reference_index,
+                    },
+                );
+            }
+            let join_any = async move {
+                let (selected, _, _) = futures::future::select_all(futures).await;
+                selected
+            };
+            let change_event_future_result: Pin<
+                Box<(dyn std::future::Future<Output = std::result::Result<(), StoreError>> + Send)>,
+            > = Box::pin(join_any);
+            let status_result: std::result::Result<OpenDirectoryStatus, StoreError> =
+                match store_error {
+                    Some(error) => Err(error),
+                    None => self
+                        .storage
+                        .store_value(Arc::new(Value::new(
+                            postcard::to_allocvec(&DirectoryTree { children }).unwrap(),
+                            references,
+                        )))
+                        .map(|reference| {
+                            OpenDirectoryStatus::new(
+                                reference.digest,
+                                directories_open_count,
+                                files_open_count,
+                                files_open_for_writing_count,
+                                files_unflushed_count,
+                                bytes_unflushed_count,
+                            )
+                        }),
+                };
+            (status_result, change_event_future_result)
+        })
     }
 }
 
@@ -388,16 +549,11 @@ fn test_normalized_path_new() {
     );
 }
 
-#[derive(Debug)]
-pub struct FileContentDescription {
-    content: BlobDigest,
-    size: u64,
-}
-
-impl FileContentDescription {
-    pub fn new(content: BlobDigest, size: u64) -> Self {
-        Self { content, size }
-    }
+pub struct OpenFileStatus {
+    pub digest: BlobDigest,
+    pub size: u64,
+    pub is_writeable: bool,
+    pub bytes_unflushed_count: u64,
 }
 
 #[derive(Debug)]
@@ -410,6 +566,8 @@ struct OpenFileContentBuffer {
 pub struct OpenFile {
     content: tokio::sync::Mutex<OpenFileContentBuffer>,
     storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    change_event_sender: tokio::sync::watch::Sender<()>,
+    change_event_receiver: tokio::sync::watch::Receiver<()>,
 }
 
 impl OpenFile {
@@ -418,12 +576,15 @@ impl OpenFile {
         has_uncommitted_changes: bool,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     ) -> OpenFile {
+        let (sender, receiver) = tokio::sync::watch::channel(());
         OpenFile {
             content: tokio::sync::Mutex::new(OpenFileContentBuffer {
                 data: content,
                 has_uncommitted_changes: has_uncommitted_changes,
             }),
             storage: storage,
+            change_event_sender: sender,
+            change_event_receiver: receiver,
         }
     }
 
@@ -452,6 +613,7 @@ impl OpenFile {
                 }
             };
             content_locked.has_uncommitted_changes = true;
+            self.change_event_sender.send(()).unwrap();
             Ok(())
         })
     }
@@ -472,19 +634,36 @@ impl OpenFile {
         })
     }
 
-    pub fn flush(&self) {}
+    pub fn flush(&self) {
+        // TODO: mark as flushed or something
+        self.change_event_sender.send(()).unwrap();
+    }
 
-    pub async fn poll_status(&self) -> std::result::Result<FileContentDescription, StoreError> {
+    pub async fn wait_for_next_change(
+        &self,
+    ) -> (
+        std::result::Result<OpenFileStatus, StoreError>,
+        Pin<Box<(dyn std::future::Future<Output = ()> + Send)>>,
+    ) {
         let mut content_locked = self.content.lock().await;
         let size = content_locked.data.len();
-        let content_reference = self
+        let maybe_content_reference = self
             .storage
-            .store_value(Arc::new(Value::new(content_locked.data.clone(), vec![])))?;
+            .store_value(Arc::new(Value::new(content_locked.data.clone(), vec![])));
         content_locked.has_uncommitted_changes = false;
-        Ok(FileContentDescription {
-            content: content_reference.digest,
-            size: size as u64,
-        })
+        let mut receiver = self.change_event_receiver.clone();
+        let change_event_future = async move { receiver.changed().await.unwrap() };
+        (
+            maybe_content_reference.map(|content_reference| OpenFileStatus {
+                digest: content_reference.digest,
+                size: size as u64,
+                // TODO
+                is_writeable: true,
+                // TODO
+                bytes_unflushed_count: 0,
+            }),
+            Box::pin(change_event_future),
+        )
     }
 }
 
@@ -565,47 +744,54 @@ mod tests {
     #[tokio::test]
     async fn test_open_directory_get_meta_data() {
         let expected = DirectoryEntryKind::File(12);
-        let directory = OpenDirectory {
-            names: tokio::sync::Mutex::new(BTreeMap::from([(
+        let directory = OpenDirectory::new(
+            tokio::sync::Mutex::new(BTreeMap::from([(
                 "test.txt".to_string(),
                 NamedEntry::NotOpen(expected.clone(), BlobDigest::hash(&[])),
             )])),
-            storage: Arc::new(NeverUsedStorage {}),
-        };
+            Arc::new(NeverUsedStorage {}),
+        );
         let meta_data = directory.get_meta_data("test.txt").await.unwrap();
         assert_eq!(expected, meta_data);
     }
 
     #[tokio::test]
-    async fn test_open_directory_poll_status() {
+    async fn test_open_directory_wait_for_next_change() {
         let expected = DirectoryEntryKind::File(12);
         let storage = Arc::new(InMemoryValueStorage::empty());
-        let directory = OpenDirectory {
-            names: tokio::sync::Mutex::new(BTreeMap::from([(
+        let directory = OpenDirectory::new(
+            tokio::sync::Mutex::new(BTreeMap::from([(
                 "test.txt".to_string(),
                 NamedEntry::NotOpen(expected.clone(), BlobDigest::hash(&[])),
             )])),
-            storage: storage.clone(),
-        };
-        let status: BlobDigest = directory.poll_status().await.unwrap();
+            storage.clone(),
+        );
+        let (maybe_status, _change_event_future) = directory.wait_for_next_change().await;
         assert_eq!(
-            BlobDigest::new(&[
-                104, 239, 112, 74, 159, 151, 115, 53, 77, 79, 0, 61, 0, 255, 60, 199, 108, 6, 169,
-                103, 74, 159, 244, 189, 32, 88, 122, 64, 159, 105, 106, 157, 205, 186, 47, 210,
-                169, 3, 196, 19, 48, 211, 86, 202, 96, 177, 113, 146, 195, 171, 48, 102, 23, 244,
-                236, 205, 2, 38, 202, 233, 41, 2, 52, 27
-            ]),
-            status
+            Ok(OpenDirectoryStatus::new(
+                BlobDigest::new(&[
+                    104, 239, 112, 74, 159, 151, 115, 53, 77, 79, 0, 61, 0, 255, 60, 199, 108, 6,
+                    169, 103, 74, 159, 244, 189, 32, 88, 122, 64, 159, 105, 106, 157, 205, 186, 47,
+                    210, 169, 3, 196, 19, 48, 211, 86, 202, 96, 177, 113, 146, 195, 171, 48, 102,
+                    23, 244, 236, 205, 2, 38, 202, 233, 41, 2, 52, 27
+                ]),
+                1,
+                0,
+                0,
+                0,
+                0
+            )),
+            maybe_status
         );
         assert_eq!(1, storage.len());
     }
 
     #[tokio::test]
     async fn test_open_directory_open_file() {
-        let directory = OpenDirectory {
-            names: tokio::sync::Mutex::new(BTreeMap::new()),
-            storage: Arc::new(NeverUsedStorage {}),
-        };
+        let directory = OpenDirectory::new(
+            tokio::sync::Mutex::new(BTreeMap::new()),
+            Arc::new(NeverUsedStorage {}),
+        );
         let file_name = "test.txt";
         let opened = directory.open_file(file_name).await.unwrap();
         opened.flush();
@@ -626,10 +812,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_directory_after_file_write() {
-        let directory = OpenDirectory {
-            names: tokio::sync::Mutex::new(BTreeMap::new()),
-            storage: Arc::new(NeverUsedStorage {}),
-        };
+        let directory = OpenDirectory::new(
+            tokio::sync::Mutex::new(BTreeMap::new()),
+            Arc::new(NeverUsedStorage {}),
+        );
         let file_name = "test.txt";
         let opened = directory.open_file(file_name).await.unwrap();
         let file_content = &b"hello world"[..];
@@ -647,10 +833,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_meta_data_after_file_write() {
-        let directory = OpenDirectory {
-            names: tokio::sync::Mutex::new(BTreeMap::new()),
-            storage: Arc::new(NeverUsedStorage {}),
-        };
+        let directory = OpenDirectory::new(
+            tokio::sync::Mutex::new(BTreeMap::new()),
+            Arc::new(NeverUsedStorage {}),
+        );
         let file_name = "test.txt";
         let opened = directory.open_file(file_name).await.unwrap();
         let file_content = &b"hello world"[..];

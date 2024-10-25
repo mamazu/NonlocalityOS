@@ -1,6 +1,6 @@
 use astraea::storage::{LoadRoot, SQLiteStorage, UpdateRoot};
 use dav_server::{fakels::FakeLs, DavHandler};
-use dogbox_tree_editor::OpenDirectory;
+use dogbox_tree_editor::{OpenDirectory, OpenDirectoryStatus};
 use hyper::{body, server::conn::http1, Request};
 use hyper_util::rt::TokioIo;
 use std::{
@@ -44,19 +44,27 @@ async fn save_tree_regularly(
     root_name: &str,
     blob_storage: &(dyn UpdateRoot + Sync),
 ) {
-    let mut previous_root_digest = None;
+    let mut previous_root_status: Option<OpenDirectoryStatus> = None;
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        match root.poll_status().await {
-            Ok(root_digest) => {
-                if previous_root_digest != Some(root_digest) {
-                    println!("Root digest changed: {:?}", &root_digest);
-                    blob_storage.update_root(root_name, &root_digest);
-                    previous_root_digest = Some(root_digest);
+        let (maybe_status, change_event_future) = root.wait_for_next_change().await;
+        match maybe_status {
+            Ok(root_status) => {
+                if previous_root_status.as_ref() != Some(&root_status) {
+                    println!("Root changed: {:?}", &root_status);
+                    blob_storage.update_root(root_name, &root_status.digest);
+                    previous_root_status = Some(root_status);
                 }
             }
             Err(error) => {
                 println!("Could not poll root status: {:?}", &error);
+            }
+        }
+        match change_event_future.await {
+            Ok(_) => {
+                println!("Detected a change event!");
+            }
+            Err(error) => {
+                println!("Could not wait for change event: {:?}", &error);
             }
         }
     }
@@ -125,7 +133,7 @@ mod tests {
         let database_file_name = temporary_directory.path().join("dogbox_dav_server.sqlite");
         let server_url = format!("http://{}", actual_address);
         tokio::select! {
-            result = run_dav_server(listener, &database_file_name ) => {
+            result = run_dav_server(listener, &database_file_name) => {
                 panic!("Server isn't expected to exit: {:?}", result);
             }
             _ = run_client(server_url) => {
