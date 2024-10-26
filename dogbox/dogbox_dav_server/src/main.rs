@@ -11,12 +11,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::net::{TcpListener, TcpStream};
+use tracing::info;
 mod file_system;
 mod file_system_test;
 use file_system::DogBoxFileSystem;
 
 async fn serve_connection(stream: TcpStream, dav_server: Arc<DavHandler>) {
     let make_service = move |req: Request<body::Incoming>| {
+        info!("Request: {:?}", &req);
         let dav_server = dav_server.clone();
         async move { Ok::<_, Infallible>(dav_server.handle(req).await) }
     };
@@ -315,6 +317,25 @@ mod tests {
                     assert_eq!(1, listed.len());
                     expect_directory(&listed[0], &format!("/{}/", dir_name));
                 }
+            })
+        };
+        test_fresh_dav_server(change_files, verify_changes).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_list_infinity() {
+        // WebDAV servers sometimes refuse "depth: infinity" PROPFIND requests. The library we use does this as well.
+        let change_files =
+            |_client: Client| -> Pin<Box<dyn Future<Output = ()>>> { Box::pin(async move {}) };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                assert_eq!(
+                    "reqwest_dav::Error { kind: \"Decode\", source: StatusMismatched(StatusMismatchedError { response_code: 403, expected_code: 207 }) }",
+                    format!(
+                        "{:?}",
+                        &client.list("/", Depth::Infinity).await.unwrap_err()
+                    )
+                );
             })
         };
         test_fresh_dav_server(change_files, verify_changes).await

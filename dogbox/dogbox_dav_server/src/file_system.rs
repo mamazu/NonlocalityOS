@@ -361,6 +361,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         &'a self,
         _path: &'a dav_server::davpath::DavPath,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        info!("have_props");
         Box::pin(std::future::ready(false))
     }
 
