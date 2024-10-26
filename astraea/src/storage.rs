@@ -4,6 +4,7 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
+use tracing::info;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum StoreError {
@@ -192,6 +193,7 @@ impl LoadStoreValue for SQLiteStorage {}
 
 impl UpdateRoot for SQLiteStorage {
     fn update_root(&self, name: &str, target: &BlobDigest) {
+        info!("Update root {} to {}", name, target);
         let connection_locked = self.connection.lock().unwrap();
         let target_array: [u8; 64] = (*target).into();
         connection_locked.execute(
@@ -211,6 +213,11 @@ impl LoadRoot for SQLiteStorage {
             let target = row.get(0).unwrap(/*TODO*/);
             Ok(target)
          } ).optional().unwrap(/*TODO*/);
-        maybe_target.map(|target| BlobDigest::new(&target))
+        let result = maybe_target.map(|target| BlobDigest::new(&target));
+        match &result {
+            Some(found) => info!("Loaded root {} as {}", name, found),
+            None => info!("Could not find root {}", name),
+        }
+        result
     }
 }

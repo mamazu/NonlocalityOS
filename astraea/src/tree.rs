@@ -34,12 +34,19 @@ impl BlobDigest {
 impl std::fmt::Debug for BlobDigest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("BlobDigest")
-            .field(&format!(
-                "{}{}",
-                &hex::encode(&self.0 .0),
-                &hex::encode(&self.0 .1)
-            ))
+            .field(&format!("{}", self))
             .finish()
+    }
+}
+
+impl std::fmt::Display for BlobDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}{}",
+            &hex::encode(&self.0 .0),
+            &hex::encode(&self.0 .1)
+        )
     }
 }
 

@@ -137,6 +137,7 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
+                    dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
                 },
             }
         })
@@ -155,6 +156,7 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
+                    dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
                 },
             }
         })
@@ -239,6 +241,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
+                    dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
                 },
             };
             Ok(Box::pin(stream! {
@@ -282,6 +285,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
+                    dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
                 },
             }
         })
@@ -322,6 +326,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                     dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
+                    dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
                 },
             }
         })

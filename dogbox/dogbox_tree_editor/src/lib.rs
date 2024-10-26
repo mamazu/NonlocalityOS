@@ -21,6 +21,7 @@ pub enum Error {
     CannotOpenDirectoryAsRegularFile,
     Postcard(postcard::Error),
     ReferenceIndexOutOfRange,
+    FileSizeMismatch,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -88,7 +89,9 @@ impl NamedEntry {
         &self,
     ) -> (
         std::result::Result<NamedEntryStatus, StoreError>,
-        Pin<Box<dyn std::future::Future<Output = std::result::Result<(), StoreError>> + Send>>,
+        Option<
+            Pin<Box<dyn std::future::Future<Output = std::result::Result<(), StoreError>> + Send>>,
+        >,
     ) {
         match self {
             NamedEntry::NotOpen(directory_entry_kind, blob_digest) => (
@@ -103,7 +106,7 @@ impl NamedEntry {
                     },
                     *blob_digest,
                 )),
-                Box::pin(std::future::ready(Ok(()))),
+                None,
             ),
             NamedEntry::OpenRegularFile(open_file) => {
                 let (maybe_open_file_status, change_event_future) =
@@ -112,7 +115,7 @@ impl NamedEntry {
                     maybe_open_file_status.map(|open_file_status| {
                         NamedEntryStatus::Open(OpenNamedEntryStatus::File(open_file_status))
                     }),
-                    Box::pin(change_event_future.map(|success| Ok(success))),
+                    Some(Box::pin(change_event_future.map(|success| Ok(success)))),
                 )
             }
             NamedEntry::OpenSubdirectory(directory) => {
@@ -124,7 +127,7 @@ impl NamedEntry {
                             open_directory_status,
                         ))
                     }),
-                    change_event_future,
+                    Some(change_event_future),
                 )
             }
         }
@@ -200,6 +203,7 @@ impl OpenDirectory {
     async fn read(&self) -> Stream<MutableDirectoryEntry> {
         let names_locked = self.names.lock().await;
         let snapshot = names_locked.clone();
+        info!("Reading directory with {} entries", snapshot.len());
         Box::pin(stream! {
             for cached_entry in snapshot {
                 let kind = cached_entry.1.get_meta_data().await;
@@ -223,13 +227,22 @@ impl OpenDirectory {
         let mut names_locked = self.names.lock().await;
         match names_locked.get_mut(name) {
             Some(found) => match found {
-                NamedEntry::NotOpen(kind, _digest) => match kind {
+                NamedEntry::NotOpen(kind, digest) => match kind {
                     DirectoryEntryKind::Directory => todo!(),
                     DirectoryEntryKind::File(length) => {
-                        // TODO: read file contents. For now we assume that the example file is empty at the start.
-                        assert_eq!(0, *length);
+                        let content = if *length > 0 {
+                            let file_value = self.storage.load_value(&Reference::new(digest.clone())).unwrap(/*TODO*/);
+                            if *length != file_value.serialized.len() as u64 {
+                                return Err(Error::FileSizeMismatch);
+                            }
+                            // TODO: avoid clone
+                            file_value.serialized.clone()
+                        } else {
+                            // No need to load the content of a file we already know is empty.
+                            vec![]
+                        };
                         let open_file =
-                            Arc::new(OpenFile::new(vec![], false, self.storage.clone()));
+                            Arc::new(OpenFile::new(content, false, self.storage.clone()));
                         *found = NamedEntry::OpenRegularFile(open_file.clone());
                         info!(
                             "Opening file {} sends a change event for its parent directory.",
@@ -244,11 +257,12 @@ impl OpenDirectory {
             },
             None => {
                 let open_file = Arc::new(OpenFile::new(vec![], true, self.storage.clone()));
-                info!("Adding file {} to the directory", &name);
+                info!("Adding file {} to the directory which sends a change event for its parent directory.", &name);
                 names_locked.insert(
                     name.to_string(),
                     NamedEntry::OpenRegularFile(open_file.clone()),
                 );
+                self.change_event_sender.send(()).unwrap();
                 Ok(open_file)
             }
         }
@@ -266,6 +280,10 @@ impl OpenDirectory {
                     Err(error) => return Err(Error::Postcard(error)),
                 };
                 let mut entries = vec![];
+                info!(
+                    "Loading directory with {} entries",
+                    parsed_directory.children.len()
+                );
                 entries.reserve(parsed_directory.children.len());
                 for maybe_entry in parsed_directory.children.iter().map(|child| {
                     let kind = match child.1.kind {
@@ -398,7 +416,7 @@ impl OpenDirectory {
             let mut store_error: Option<StoreError> = None;
             for entry in names_locked.iter() {
                 let name = FileName::try_from(entry.0.as_str()).unwrap();
-                let (maybe_named_entry_status, next_change_future) =
+                let (maybe_named_entry_status, maybe_next_change_future) =
                     entry.1.wait_for_next_change().await;
                 let named_entry_status = match maybe_named_entry_status {
                     Ok(success) => success,
@@ -407,7 +425,9 @@ impl OpenDirectory {
                         break;
                     }
                 };
-                futures.push(next_change_future);
+                if let Some(next_change_future) = maybe_next_change_future {
+                    futures.push(next_change_future);
+                }
                 let (kind, digest) = match named_entry_status {
                     NamedEntryStatus::Closed(directory_entry_kind, blob_digest) => {
                         (directory_entry_kind, blob_digest)
@@ -472,22 +492,24 @@ impl OpenDirectory {
             let status_result: std::result::Result<OpenDirectoryStatus, StoreError> =
                 match store_error {
                     Some(error) => Err(error),
-                    None => self
-                        .storage
-                        .store_value(Arc::new(Value::new(
-                            postcard::to_allocvec(&DirectoryTree { children }).unwrap(),
-                            references,
-                        )))
-                        .map(|reference| {
-                            OpenDirectoryStatus::new(
-                                reference.digest,
-                                directories_open_count,
-                                files_open_count,
-                                files_open_for_writing_count,
-                                files_unflushed_count,
-                                bytes_unflushed_count,
-                            )
-                        }),
+                    None => {
+                        info!("Storing directory with {} entries", children.len());
+                        self.storage
+                            .store_value(Arc::new(Value::new(
+                                postcard::to_allocvec(&DirectoryTree { children }).unwrap(),
+                                references,
+                            )))
+                            .map(|reference| {
+                                OpenDirectoryStatus::new(
+                                    reference.digest,
+                                    directories_open_count,
+                                    files_open_count,
+                                    files_open_for_writing_count,
+                                    files_unflushed_count,
+                                    bytes_unflushed_count,
+                                )
+                            })
+                    }
                 };
             (status_result, change_event_future_result)
         })

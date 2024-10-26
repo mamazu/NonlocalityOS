@@ -55,17 +55,21 @@ async fn save_tree_regularly(
     save_status_sender: tokio::sync::watch::Sender<SaveStatus>,
 ) {
     let mut previous_root_status: Option<OpenDirectoryStatus> = None;
+    let mut number_of_no_changes_in_a_row: u64 = 0;
     loop {
         let (maybe_status, change_event_future) = root.wait_for_next_change().await;
         match maybe_status {
             Ok(root_status) => {
                 if previous_root_status.as_ref() == Some(&root_status) {
                     println!("Root didn't change");
+                    number_of_no_changes_in_a_row += 1;
+                    assert_ne!(10, number_of_no_changes_in_a_row);
                 } else {
                     println!("Root changed: {:?}", &root_status);
+                    number_of_no_changes_in_a_row = 0;
                     blob_storage.update_root(root_name, &root_status.digest);
                     save_status_sender
-                        .send(match root_status.files_open_for_writing_count {
+                        .send(match root_status.files_unflushed_count {
                             0 => SaveStatus::Saved,
                             _ => SaveStatus::Saving,
                         })
@@ -158,15 +162,14 @@ mod tests {
     use tokio::net::TcpListener;
     use tracing::info;
 
-    async fn test_fresh_dav_server<'t>(
+    async fn run_dav_server_instance<'t>(
+        database_file_name: &std::path::Path,
         change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
-        verify_changes: impl Fn(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
+        verify_changes: &impl Fn(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
     ) {
         let address = SocketAddr::from(([127, 0, 0, 1], 0));
         let listener = TcpListener::bind(address).await.unwrap();
         let actual_address = listener.local_addr().unwrap();
-        let temporary_directory = tempfile::tempdir().unwrap();
-        let database_file_name = temporary_directory.path().join("dogbox_dav_server.sqlite");
         let server_url = format!("http://{}", actual_address);
         let (mut save_status_receiver, server) =
             run_dav_server(listener, &database_file_name).await.unwrap();
@@ -176,21 +179,51 @@ mod tests {
             // verify again to be extra sure this is deterministic
             verify_changes(create_client(server_url)).await;
         };
+        let waiting_for_saved = async {
+            info!("Waiting for the save status to become saved.");
+            save_status_receiver
+                .wait_for(|status| match status {
+                    crate::SaveStatus::Saved => true,
+                    crate::SaveStatus::Saving => false,
+                })
+                .await
+                .unwrap();
+        };
+        let testing = async {
+            client_side_testing.await;
+            waiting_for_saved.await;
+        };
         tokio::select! {
             result = server => {
                 panic!("Server isn't expected to exit: {:?}", result);
             }
-            _ = client_side_testing => {
+            _ = testing => {
             }
         };
-        loop {
-            match *save_status_receiver.borrow_and_update() {
-                crate::SaveStatus::Saved => break,
-                crate::SaveStatus::Saving => {}
-            }
-            info!("Waiting for the save status to become saved.");
-            save_status_receiver.changed().await.unwrap();
-        }
+    }
+
+    async fn test_fresh_dav_server<'t>(
+        change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
+        verify_changes: &impl Fn(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
+    ) {
+        let temporary_directory = tempfile::tempdir().unwrap();
+        let database_file_name = temporary_directory.path().join("dogbox_dav_server.sqlite");
+        assert!(!std::fs::exists(&database_file_name).unwrap());
+        info!("First test server instance");
+        run_dav_server_instance(&database_file_name, change_files, &verify_changes).await;
+
+        // Start a new instance with the database from the first instance to check if the data was persisted correctly.
+        info!("Second test server instance");
+        assert!(std::fs::exists(&database_file_name).unwrap());
+        run_dav_server_instance(
+            &database_file_name,
+            |_client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+                Box::pin(async move { /* no changes */ })
+            },
+            &verify_changes,
+        )
+        .await;
+        assert!(std::fs::exists(&database_file_name).unwrap());
     }
 
     fn create_client(server_url: String) -> Client {
@@ -258,7 +291,7 @@ mod tests {
                 expect_directory(&listed[0], "/");
             })
         };
-        test_fresh_dav_server(change_files, verify_changes).await
+        test_fresh_dav_server(change_files, &verify_changes).await
     }
 
     async fn test_create_file(content: Vec<u8>) {
@@ -282,7 +315,7 @@ mod tests {
                 assert_eq!(content_cloned, response_content);
             })
         };
-        test_fresh_dav_server(change_files, verify_changes).await
+        test_fresh_dav_server(change_files, &verify_changes).await
     }
 
     #[test_log::test(tokio::test)]
@@ -321,7 +354,7 @@ mod tests {
                 }
             })
         };
-        test_fresh_dav_server(change_files, verify_changes).await
+        test_fresh_dav_server(change_files, &verify_changes).await
     }
 
     #[test_log::test(tokio::test)]
@@ -360,7 +393,7 @@ mod tests {
                 }
             })
         };
-        test_fresh_dav_server(change_files, verify_changes).await
+        test_fresh_dav_server(change_files, &verify_changes).await
     }
 
     #[test_log::test(tokio::test)]
@@ -379,7 +412,7 @@ mod tests {
                 );
             })
         };
-        test_fresh_dav_server(change_files, verify_changes).await
+        test_fresh_dav_server(change_files, &verify_changes).await
     }
 }
 
