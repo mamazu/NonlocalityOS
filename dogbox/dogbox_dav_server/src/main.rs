@@ -154,7 +154,8 @@ mod tests {
     use tokio::net::TcpListener;
 
     async fn test_fresh_dav_server(
-        run_client: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()>>>,
+        change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()>>>,
+        verify_changes: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()>>>,
     ) {
         let address = SocketAddr::from(([127, 0, 0, 1], 0));
         let listener = TcpListener::bind(address).await.unwrap();
@@ -164,12 +165,15 @@ mod tests {
         let server_url = format!("http://{}", actual_address);
         let (mut save_status_receiver, server) =
             run_dav_server(listener, &database_file_name).await.unwrap();
-        let client = create_client(server_url);
+        let client_side_testing = async move {
+            change_files(create_client(server_url.clone())).await;
+            verify_changes(create_client(server_url)).await;
+        };
         tokio::select! {
             result = server => {
                 panic!("Server isn't expected to exit: {:?}", result);
             }
-            _ = run_client(client) => {
+            _ = client_side_testing => {
             }
         };
         loop {
@@ -220,7 +224,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_file_not_found() {
-        let run_client = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
             Box::pin(async move {
                 let error = client.get("/test.txt").await.unwrap_err();
                 match error {
@@ -237,20 +241,29 @@ mod tests {
                                 format!("{:?}", server_error)),
                     },
                 };
+            })
+        };
+        let verify_changes = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(1, listed.len());
                 expect_directory(&listed[0], "/");
             })
         };
-        test_fresh_dav_server(run_client).await
+        test_fresh_dav_server(change_files, verify_changes).await
     }
 
     async fn test_create_file(content: Vec<u8>) {
-        let run_client = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+        let file_name = "test.txt";
+        let size = content.len() as i64;
+        let content_cloned = content.clone();
+        let change_files = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
             Box::pin(async move {
-                let size = content.len() as i64;
-                let file_name = "test.txt";
-                client.put(file_name, content.clone()).await.unwrap();
+                client.put(file_name, content_cloned).await.unwrap();
+            })
+        };
+        let verify_changes = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(2, listed.len());
                 expect_directory(&listed[0], "/");
@@ -260,7 +273,7 @@ mod tests {
                 assert_eq!(content, response_content);
             })
         };
-        test_fresh_dav_server(run_client).await
+        test_fresh_dav_server(change_files, verify_changes).await
     }
 
     #[test_log::test(tokio::test)]
