@@ -169,6 +169,7 @@ dependencies = [
  "futures",
  "futures-core",
  "futures-util",
+ "hex",
  "hippeus_parser_generator",
  "lazy_static",
  "postcard",

@@ -167,7 +167,7 @@ pub struct OpenDirectory {
     names: tokio::sync::Mutex<BTreeMap<String, NamedEntry>>,
     storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     change_event_sender: tokio::sync::watch::Sender<()>,
-    change_event_receiver: tokio::sync::watch::Receiver<()>,
+    _change_event_receiver: tokio::sync::watch::Receiver<()>,
 }
 
 impl OpenDirectory {
@@ -180,7 +180,7 @@ impl OpenDirectory {
             names,
             storage,
             change_event_sender,
-            change_event_receiver,
+            _change_event_receiver: change_event_receiver,
         }
     }
 
@@ -380,29 +380,20 @@ impl OpenDirectory {
             let mut files_open_for_writing_count: usize = 0;
             let mut files_unflushed_count: usize = 0;
             let mut bytes_unflushed_count: u64 = 0;
-            let mut futures_or_none: Option<
-                Vec<
-                    Pin<
-                        Box<
-                            dyn std::future::Future<Output = std::result::Result<(), StoreError>>
-                                + Send,
-                        >,
+            let mut futures: Vec<
+                Pin<
+                    Box<
+                        dyn std::future::Future<Output = std::result::Result<(), StoreError>>
+                            + Send,
                     >,
                 >,
-            > = if self
-                .change_event_receiver
-                .clone()
-                .borrow_and_update()
-                .has_changed()
-            {
-                None
-            } else {
+            > = {
                 let mut receiver = self.change_event_sender.subscribe();
-                Some(vec![Box::pin(async move {
+                vec![Box::pin(async move {
                     receiver.changed().await.unwrap();
                     info!("Something about the directory itself changed.");
                     Ok(())
-                })])
+                })]
             };
             let mut store_error: Option<StoreError> = None;
             for entry in names_locked.iter() {
@@ -416,9 +407,7 @@ impl OpenDirectory {
                         break;
                     }
                 };
-                if let Some(ref mut futures) = futures_or_none {
-                    futures.push(next_change_future);
-                }
+                futures.push(next_change_future);
                 let (kind, digest) = match named_entry_status {
                     NamedEntryStatus::Closed(directory_entry_kind, blob_digest) => {
                         (directory_entry_kind, blob_digest)
@@ -472,16 +461,13 @@ impl OpenDirectory {
             }
             let change_event_future_result: Pin<
                 Box<(dyn std::future::Future<Output = std::result::Result<(), StoreError>> + Send)>,
-            > = match futures_or_none {
-                Some(futures) => {
-                    let join_any = async move {
-                        let (selected, index, _) = futures::future::select_all(futures).await;
-                        info!("Selected future at index {}.", index);
-                        selected
-                    };
-                    Box::pin(join_any)
-                }
-                None => Box::pin(std::future::ready(Ok(()))),
+            > = {
+                let join_any = async move {
+                    let (selected, index, _) = futures::future::select_all(futures).await;
+                    info!("Selected future at index {}.", index);
+                    selected
+                };
+                Box::pin(join_any)
             };
             let status_result: std::result::Result<OpenDirectoryStatus, StoreError> =
                 match store_error {

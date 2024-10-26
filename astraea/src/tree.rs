@@ -11,7 +11,7 @@ use std::{
 use crate::storage::{LoadValue, StoreError, StoreValue};
 
 /// SHA3-512 hash. Supports Serde because we will need this type a lot in network protocols and file formats.
-#[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, PartialOrd, Ord, Eq, Clone, Copy, Hash)]
 pub struct BlobDigest(
     /// data is split into two parts because Serde doesn't support 64-element arrays
     pub ([u8; 32], [u8; 32]),
@@ -28,6 +28,18 @@ impl BlobDigest {
         hasher.update(input);
         let result = hasher.finalize().into();
         BlobDigest::new(&result)
+    }
+}
+
+impl std::fmt::Debug for BlobDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("BlobDigest")
+            .field(&format!(
+                "{}{}",
+                &hex::encode(&self.0 .0),
+                &hex::encode(&self.0 .1)
+            ))
+            .finish()
     }
 }
 

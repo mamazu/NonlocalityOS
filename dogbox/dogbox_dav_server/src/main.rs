@@ -59,7 +59,9 @@ async fn save_tree_regularly(
         let (maybe_status, change_event_future) = root.wait_for_next_change().await;
         match maybe_status {
             Ok(root_status) => {
-                if previous_root_status.as_ref() != Some(&root_status) {
+                if previous_root_status.as_ref() == Some(&root_status) {
+                    println!("Root didn't change");
+                } else {
                     println!("Root changed: {:?}", &root_status);
                     blob_storage.update_root(root_name, &root_status.digest);
                     save_status_sender
@@ -316,6 +318,45 @@ mod tests {
                         .unwrap();
                     assert_eq!(1, listed.len());
                     expect_directory(&listed[0], &format!("/{}/", dir_name));
+                }
+            })
+        };
+        test_fresh_dav_server(change_files, verify_changes).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_nested_directories() {
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                client.mkcol("a").await.unwrap();
+                client.mkcol("a/b").await.unwrap();
+                client.mkcol("a/b/c").await.unwrap();
+            })
+        };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                {
+                    let listed = client.list("", Depth::Number(1)).await.unwrap();
+                    assert_eq!(2, listed.len());
+                    expect_directory(&listed[0], "/");
+                    expect_directory(&listed[1], "/a/");
+                }
+                {
+                    let listed = client.list("a", Depth::Number(1)).await.unwrap();
+                    assert_eq!(2, listed.len());
+                    expect_directory(&listed[0], "/a/");
+                    expect_directory(&listed[1], "/a/b/");
+                }
+                {
+                    let listed = client.list("a/b", Depth::Number(1)).await.unwrap();
+                    assert_eq!(2, listed.len());
+                    expect_directory(&listed[0], "/a/b/");
+                    expect_directory(&listed[1], "/a/b/c/");
+                }
+                {
+                    let listed = client.list("a/b/c", Depth::Number(1)).await.unwrap();
+                    assert_eq!(1, listed.len());
+                    expect_directory(&listed[0], "/a/b/c/");
                 }
             })
         };
