@@ -103,8 +103,9 @@ impl SQLiteStorage {
                 "CREATE TABLE reference (
                 id INTEGER PRIMARY KEY NOT NULL,
                 origin INTEGER NOT NULL REFERENCES value,
+                zero_based_index INTEGER NOT NULL,
                 target BLOB NOT NULL,
-                UNIQUE (origin, target),
+                UNIQUE (origin, zero_based_index),
                 CONSTRAINT digest_length_matches_sha3_512 CHECK (LENGTH(target) == 64)
             ) STRICT",
                 (),
@@ -154,11 +155,11 @@ impl StoreValue for SQLiteStorage {
             (&origin_digest, &value.serialized),
         ).unwrap(/*TODO*/);
         let inserted_value_rowid = connection_locked.last_insert_rowid();
-        for reference in &value.references {
+        for (index, reference) in value.references.iter().enumerate() {
             let target_digest: [u8; 64] = reference.reference.digest.into();
             connection_locked.execute(
-                "INSERT INTO reference (origin, target) VALUES (?1, ?2)",
-                (&inserted_value_rowid, &target_digest),
+                "INSERT INTO reference (origin, zero_based_index, target) VALUES (?1, ?2, ?3)",
+                (&inserted_value_rowid, &index, &target_digest),
             ).unwrap(/*TODO*/);
         }
         transaction.commit().unwrap(/*TODO*/);
@@ -177,13 +178,22 @@ impl LoadValue for SQLiteStorage {
             let serialized = row.get(1).unwrap(/*TODO*/);
             Ok((id, serialized))
          } ).unwrap(/*TODO*/);
-        let mut statement = connection_locked.prepare("SELECT target FROM reference WHERE origin = ?").unwrap(/*TODO*/);
+        let mut statement = connection_locked.prepare("SELECT zero_based_index, target FROM reference WHERE origin = ? ORDER BY zero_based_index ASC").unwrap(/*TODO*/);
         let results = statement.query_map([&id], |row| {
-            let target : [u8; 64] = row.get(0)?;
-            Ok(TypedReference::new(TypeId(0), Reference::new(BlobDigest::new(&target))))
+            let index : i64 = row.get(0)?;
+            let target : [u8; 64] = row.get(1)?;
+            Ok((index, TypedReference::new(TypeId(0), Reference::new(BlobDigest::new(&target)))))
         }).unwrap(/*TODO*/);
         let references: Vec<crate::tree::TypedReference> = results
-            .map(|maybe_error| maybe_error.unwrap(/*YOLO*/))
+            .enumerate()
+            .map(|(expected_index, maybe_tuple)| {
+                let tuple = maybe_tuple.unwrap(/*YOLO*/);
+                let reference = tuple.1;
+                let actual_index = tuple.0;
+                // TODO: handle mismatch properly
+                assert_eq!(expected_index as i64, actual_index);
+                reference
+            })
             .collect();
         Some(Arc::new(Value::new(serialized, references)))
     }

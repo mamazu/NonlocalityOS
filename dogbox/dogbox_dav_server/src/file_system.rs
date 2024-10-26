@@ -1,4 +1,5 @@
 use async_stream::stream;
+use dav_server::fs::FsError;
 use dogbox_tree_editor::DirectoryEntryKind;
 use dogbox_tree_editor::NormalizedPath;
 use dogbox_tree_editor::OpenFile;
@@ -395,6 +396,6 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
     }
 
     fn get_quota(&self) -> dav_server::fs::FsFuture<(u64, Option<u64>)> {
-        todo!()
+        Box::pin(core::future::ready(Err(FsError::NotImplemented)))
     }
 }
