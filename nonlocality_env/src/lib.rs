@@ -11,11 +11,34 @@ fn fd_to_object(_file_descriptor: i32) -> File {
     todo!();
 }
 
+#[cfg(target_arch = "wasm32")]
 extern "C" {
     pub fn nonlocality_connect(interface: i32) -> i32;
     pub fn nonlocality_accept() -> u64;
     pub fn nonlocality_abort();
     pub fn nonlocality_tcp_ssl_handshake(host: *const u8, host_length: i32, port: i32) -> i32;
+}
+
+// dummy definition to make the linker happy on Linux
+#[cfg(not(target_arch = "wasm32"))]
+unsafe extern "C" fn nonlocality_connect(_interface: i32) -> i32 {
+    panic!()
+}
+
+// dummy definition to make the linker happy on Linux
+#[cfg(not(target_arch = "wasm32"))]
+unsafe extern "C" fn nonlocality_accept() -> u64 {
+    panic!()
+}
+
+// dummy definition to make the linker happy on Linux
+#[cfg(not(target_arch = "wasm32"))]
+unsafe extern "C" fn nonlocality_tcp_ssl_handshake(
+    _host: *const u8,
+    _host_length: i32,
+    _port: i32,
+) -> i32 {
+    panic!()
 }
 
 pub struct Accepted {

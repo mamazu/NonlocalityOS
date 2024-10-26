@@ -1,0 +1,5 @@
+[build]
+rustc-wrapper = "sccache"
+
+# disabled for sccache (https://github.com/mozilla/sccache?tab=readme-ov-file#rust)
+incremental = false

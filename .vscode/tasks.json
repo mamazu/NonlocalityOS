@@ -1,0 +1,13 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // source: https://github.com/ryanluker/vscode-coverage-gutters/issues/236#issuecomment-2397505737
+            "label": "Watch coverage on open",
+            "command": "${command:coverage-gutters.watchCoverageAndVisibleEditors}",
+            "runOptions": {
+                "runOn": "folderOpen"
+            }
+        }
+    ]
+}

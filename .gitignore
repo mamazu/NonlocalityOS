@@ -1,4 +1,6 @@
-/.vscode
 /target
+/target-coverage
 /coverage
 /.idea
+/build_rs_cov.profraw
+/lcov.info

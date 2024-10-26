@@ -6,6 +6,8 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
 
+    // TODO: solve OpenSSL rebuild issues on Windows
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_sqlcipher_encryption() {
         use crate::storage::StoreError;

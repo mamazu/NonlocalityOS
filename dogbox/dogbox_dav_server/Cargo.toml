@@ -24,7 +24,7 @@ tempfile = "3"
 rusqlite = {version = "0", features = ["bundled-sqlcipher"]}
 
 [target.'cfg(target_os = "windows")'.dependencies]
-rusqlite = {version = "0", features = ["bundled-sqlcipher-vendored-openssl"]}
+rusqlite = {version = "0", features = ["bundled"]}
 
 [dev-dependencies]
 reqwest_dav = "0"

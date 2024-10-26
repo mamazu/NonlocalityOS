@@ -26,12 +26,8 @@ impl BlobDigest {
     pub fn hash(input: &[u8]) -> BlobDigest {
         let mut hasher = Sha3_512::new();
         hasher.update(input);
-        let result = hasher.finalize();
-        let slice: &[u8] = result.as_slice();
-        let mut chunks: std::slice::ArrayChunks<u8, 64> = slice.array_chunks();
-        let chunk = chunks.next().unwrap();
-        assert!(chunks.remainder().is_empty());
-        BlobDigest::new(chunk)
+        let result = hasher.finalize().into();
+        BlobDigest::new(&result)
     }
 }
 
@@ -282,13 +278,9 @@ pub fn calculate_reference(referenced: &Value) -> Reference {
         hasher.update(item.reference.digest.0 .0);
         hasher.update(item.reference.digest.0 .1);
     }
-    let result = hasher.finalize();
-    let slice: &[u8] = result.as_slice();
-    let mut chunks: std::slice::ArrayChunks<u8, 64> = slice.array_chunks();
-    let chunk = chunks.next().unwrap();
-    assert!(chunks.remainder().is_empty());
+    let result = hasher.finalize().into();
     Reference {
-        digest: BlobDigest::new(chunk),
+        digest: BlobDigest::new(&result),
     }
 }
 

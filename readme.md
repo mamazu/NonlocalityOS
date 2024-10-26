@@ -2,6 +2,7 @@
 
 * install Rust: <https://www.rust-lang.org/learn/get-started> (tested with Rust 1.84.0)
 * restart your terminal
+* install the `coverage-gutters` VS Code extension <https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters>
 
 ## Windows
 
@@ -22,7 +23,23 @@
 
 # Watch code and keep running tests
 
+## Linux
+
 * `./watch_cargo_tests.sh`
+
+## Windows
+
+* `watch_cargo_tests.bat`
+
+# Coverage
+
+## Linux
+
+* run `./coverage.sh`
+
+## Windows
+
+* run `coverage.bat`
 
 # Formatting code
 
@@ -36,4 +53,4 @@
 
 ## Visual Studio Code
 
-* install the `rust-analyzer` extension
+* install the `rust-analyzer` VS Code extension

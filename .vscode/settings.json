@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.checkOnSave": true,
+    "coverage-gutters.showRulerCoverage": true,
+    "coverage-gutters.showGutterCoverage": true,
+    "coverage-gutters.showLineCoverage": false,
+    "[rust]": {
+        "editor.formatOnSave": true,
+    }
+}

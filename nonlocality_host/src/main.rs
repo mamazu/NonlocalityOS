@@ -1,4 +1,3 @@
-#![feature(array_chunks)]
 use astraea::storage::InMemoryValueStorage;
 use astraea::storage::StoreValue;
 use astraea::tree::make_beginning_of_time;
