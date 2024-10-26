@@ -153,9 +153,9 @@ mod tests {
     use std::{future::Future, net::SocketAddr, pin::Pin};
     use tokio::net::TcpListener;
 
-    async fn test_fresh_dav_server(
-        change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()>>>,
-        verify_changes: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()>>>,
+    async fn test_fresh_dav_server<'t>(
+        change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
+        verify_changes: impl Fn(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
     ) {
         let address = SocketAddr::from(([127, 0, 0, 1], 0));
         let listener = TcpListener::bind(address).await.unwrap();
@@ -167,6 +167,8 @@ mod tests {
             run_dav_server(listener, &database_file_name).await.unwrap();
         let client_side_testing = async move {
             change_files(create_client(server_url.clone())).await;
+            verify_changes(create_client(server_url.clone())).await;
+            // verify again to be extra sure this is deterministic
             verify_changes(create_client(server_url)).await;
         };
         tokio::select! {
@@ -257,12 +259,13 @@ mod tests {
         let file_name = "test.txt";
         let size = content.len() as i64;
         let content_cloned = content.clone();
-        let change_files = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
             Box::pin(async move {
                 client.put(file_name, content_cloned).await.unwrap();
             })
         };
-        let verify_changes = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            let content_cloned = content.clone();
             Box::pin(async move {
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(2, listed.len());
@@ -270,7 +273,7 @@ mod tests {
                 expect_file(&listed[1], &format!("/{}", file_name), size);
                 let response = client.get(&file_name).await.unwrap();
                 let response_content = response.bytes().await.unwrap().to_vec();
-                assert_eq!(content, response_content);
+                assert_eq!(content_cloned, response_content);
             })
         };
         test_fresh_dav_server(change_files, verify_changes).await
