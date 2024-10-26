@@ -231,6 +231,10 @@ impl OpenDirectory {
                         let open_file =
                             Arc::new(OpenFile::new(vec![], false, self.storage.clone()));
                         *found = NamedEntry::OpenRegularFile(open_file.clone());
+                        info!(
+                            "Opening file {} sends a change event for its parent directory.",
+                            &name
+                        );
                         self.change_event_sender.send(()).unwrap();
                         Ok(open_file)
                     }
@@ -292,20 +296,23 @@ impl OpenDirectory {
     async fn open_subdirectory(&self, name: String) -> Result<Arc<OpenDirectory>> {
         let mut names_locked = self.names.lock().await;
         match names_locked.get_mut(&name) {
-            Some(found) => match found {
-                NamedEntry::NotOpen(kind, digest) => match kind {
-                    DirectoryEntryKind::Directory => {
-                        let subdirectory =
-                            Self::load_directory(self.storage.clone(), digest).await?;
-                        *found = NamedEntry::OpenSubdirectory(subdirectory.clone());
-                        self.change_event_sender.send(()).unwrap();
-                        Ok(subdirectory)
-                    }
-                    DirectoryEntryKind::File(_) => Err(Error::CannotOpenRegularFileAsDirectory),
-                },
-                NamedEntry::OpenRegularFile(_) => Err(Error::CannotOpenRegularFileAsDirectory),
-                NamedEntry::OpenSubdirectory(subdirectory) => Ok(subdirectory.clone()),
-            },
+            Some(found) => {
+                match found {
+                    NamedEntry::NotOpen(kind, digest) => match kind {
+                        DirectoryEntryKind::Directory => {
+                            let subdirectory =
+                                Self::load_directory(self.storage.clone(), digest).await?;
+                            *found = NamedEntry::OpenSubdirectory(subdirectory.clone());
+                            info!("Opening directory {} sends a change event for its parent directory.", &name);
+                            self.change_event_sender.send(()).unwrap();
+                            Ok(subdirectory)
+                        }
+                        DirectoryEntryKind::File(_) => Err(Error::CannotOpenRegularFileAsDirectory),
+                    },
+                    NamedEntry::OpenRegularFile(_) => Err(Error::CannotOpenRegularFileAsDirectory),
+                    NamedEntry::OpenSubdirectory(subdirectory) => Ok(subdirectory.clone()),
+                }
+            }
             None => Err(Error::NotFound),
         }
     }
@@ -329,6 +336,11 @@ impl OpenDirectory {
         match names_locked.get(&name) {
             Some(_found) => todo!(),
             None => {
+                info!(
+                    "Creating directory {} sends a change event for its parent directory.",
+                    &name
+                );
+                self.change_event_sender.send(()).unwrap();
                 names_locked.insert(
                     name,
                     NamedEntry::OpenSubdirectory(Arc::new(OpenDirectory::new(
@@ -336,7 +348,6 @@ impl OpenDirectory {
                         self.storage.clone(),
                     ))),
                 );
-                self.change_event_sender.send(()).unwrap();
                 Ok(())
             }
         }
@@ -364,24 +375,35 @@ impl OpenDirectory {
             let names_locked = self.names.lock().await;
             let mut children = std::collections::BTreeMap::new();
             let mut references = Vec::new();
-            let mut futures: Vec<
-                Pin<
-                    Box<
-                        dyn std::future::Future<Output = std::result::Result<(), StoreError>>
-                            + Send,
-                    >,
-                >,
-            > = vec![];
             let mut directories_open_count: usize=/*count self*/ 1;
             let mut files_open_count: usize = 0;
             let mut files_open_for_writing_count: usize = 0;
             let mut files_unflushed_count: usize = 0;
             let mut bytes_unflushed_count: u64 = 0;
-            let mut receiver = self.change_event_receiver.clone();
-            futures.push(Box::pin(async move {
-                receiver.changed().await.unwrap();
-                Ok(())
-            }));
+            let mut futures_or_none: Option<
+                Vec<
+                    Pin<
+                        Box<
+                            dyn std::future::Future<Output = std::result::Result<(), StoreError>>
+                                + Send,
+                        >,
+                    >,
+                >,
+            > = if self
+                .change_event_receiver
+                .clone()
+                .borrow_and_update()
+                .has_changed()
+            {
+                None
+            } else {
+                let mut receiver = self.change_event_sender.subscribe();
+                Some(vec![Box::pin(async move {
+                    receiver.changed().await.unwrap();
+                    info!("Something about the directory itself changed.");
+                    Ok(())
+                })])
+            };
             let mut store_error: Option<StoreError> = None;
             for entry in names_locked.iter() {
                 let name = FileName::try_from(entry.0.as_str()).unwrap();
@@ -394,7 +416,9 @@ impl OpenDirectory {
                         break;
                     }
                 };
-                futures.push(next_change_future);
+                if let Some(ref mut futures) = futures_or_none {
+                    futures.push(next_change_future);
+                }
                 let (kind, digest) = match named_entry_status {
                     NamedEntryStatus::Closed(directory_entry_kind, blob_digest) => {
                         (directory_entry_kind, blob_digest)
@@ -446,13 +470,19 @@ impl OpenDirectory {
                     },
                 );
             }
-            let join_any = async move {
-                let (selected, _, _) = futures::future::select_all(futures).await;
-                selected
-            };
             let change_event_future_result: Pin<
                 Box<(dyn std::future::Future<Output = std::result::Result<(), StoreError>> + Send)>,
-            > = Box::pin(join_any);
+            > = match futures_or_none {
+                Some(futures) => {
+                    let join_any = async move {
+                        let (selected, index, _) = futures::future::select_all(futures).await;
+                        info!("Selected future at index {}.", index);
+                        selected
+                    };
+                    Box::pin(join_any)
+                }
+                None => Box::pin(std::future::ready(Ok(()))),
+            };
             let status_result: std::result::Result<OpenDirectoryStatus, StoreError> =
                 match store_error {
                     Some(error) => Err(error),
@@ -567,7 +597,7 @@ pub struct OpenFile {
     content: tokio::sync::Mutex<OpenFileContentBuffer>,
     storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     change_event_sender: tokio::sync::watch::Sender<()>,
-    change_event_receiver: tokio::sync::watch::Receiver<()>,
+    _change_event_receiver: tokio::sync::watch::Receiver<()>,
 }
 
 impl OpenFile {
@@ -584,7 +614,7 @@ impl OpenFile {
             }),
             storage: storage,
             change_event_sender: sender,
-            change_event_receiver: receiver,
+            _change_event_receiver: receiver,
         }
     }
 
@@ -613,6 +643,7 @@ impl OpenFile {
                 }
             };
             content_locked.has_uncommitted_changes = true;
+            info!("Writing to file sends a change event for this file.");
             self.change_event_sender.send(()).unwrap();
             Ok(())
         })
@@ -636,6 +667,7 @@ impl OpenFile {
 
     pub fn flush(&self) {
         // TODO: mark as flushed or something
+        info!("Flush sends a change event");
         self.change_event_sender.send(()).unwrap();
     }
 
@@ -651,7 +683,7 @@ impl OpenFile {
             .storage
             .store_value(Arc::new(Value::new(content_locked.data.clone(), vec![])));
         content_locked.has_uncommitted_changes = false;
-        let mut receiver = self.change_event_receiver.clone();
+        let mut receiver = self.change_event_sender.subscribe();
         let change_event_future = async move { receiver.changed().await.unwrap() };
         (
             maybe_content_reference.map(|content_reference| OpenFileStatus {

@@ -152,6 +152,7 @@ mod tests {
     use reqwest_dav::{list_cmd::ListEntity, Auth, Client, ClientBuilder, Depth};
     use std::{future::Future, net::SocketAddr, pin::Pin};
     use tokio::net::TcpListener;
+    use tracing::info;
 
     async fn test_fresh_dav_server<'t>(
         change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
@@ -183,6 +184,7 @@ mod tests {
                 crate::SaveStatus::Saved => break,
                 crate::SaveStatus::Saving => {}
             }
+            info!("Waiting for the save status to become saved.");
             save_status_receiver.changed().await.unwrap();
         }
     }
@@ -287,6 +289,35 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_create_file_with_content() {
         test_create_file(vec![b'a']).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_create_directory() {
+        let dir_name = "Dir4";
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                client.mkcol(&dir_name).await.unwrap();
+            })
+        };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                {
+                    let listed = client.list("", Depth::Number(1)).await.unwrap();
+                    assert_eq!(2, listed.len());
+                    expect_directory(&listed[0], "/");
+                    expect_directory(&listed[1], &format!("/{}/", dir_name));
+                }
+                {
+                    let listed = client
+                        .list(&format!("/{}/", dir_name), Depth::Number(1))
+                        .await
+                        .unwrap();
+                    assert_eq!(1, listed.len());
+                    expect_directory(&listed[0], &format!("/{}/", dir_name));
+                }
+            })
+        };
+        test_fresh_dav_server(change_files, verify_changes).await
     }
 }
 
