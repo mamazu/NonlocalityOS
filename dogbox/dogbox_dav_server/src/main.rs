@@ -249,12 +249,12 @@ mod tests {
         }
     }
 
-    fn expect_file(entity: &ListEntity, name: &str, size: i64) {
+    fn expect_file(entity: &ListEntity, name: &str, size: i64, content_type: &str) {
         match entity {
             reqwest_dav::list_cmd::ListEntity::File(file) => {
                 assert_eq!(name, file.href);
                 assert_eq!(size, file.content_length);
-                assert_eq!("text/plain", file.content_type);
+                assert_eq!(content_type, file.content_type);
                 //TODO: check tag value
                 assert_eq!(true, file.tag.is_some());
                 //TODO: check last modified
@@ -309,7 +309,7 @@ mod tests {
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(2, listed.len());
                 expect_directory(&listed[0], "/");
-                expect_file(&listed[1], &format!("/{}", file_name), size);
+                expect_file(&listed[1], &format!("/{}", file_name), size, "text/plain");
                 let response = client.get(&file_name).await.unwrap();
                 let response_content = response.bytes().await.unwrap().to_vec();
                 assert_eq!(content_cloned, response_content);
@@ -431,6 +431,53 @@ mod tests {
                 let listed = client.list("", Depth::Number(1)).await.unwrap();
                 assert_eq!(1, listed.len());
                 expect_directory(&listed[0], "/");
+            })
+        };
+        test_fresh_dav_server(change_files, &verify_changes).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_rename_file() {
+        let content = "test";
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                client.put("A", content).await.unwrap();
+                client.mv("A", "B").await.unwrap();
+            })
+        };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                let listed = client.list("", Depth::Number(1)).await.unwrap();
+                assert_eq!(2, listed.len());
+                expect_directory(&listed[0], "/");
+                expect_file(
+                    &listed[1],
+                    "/B",
+                    content.len() as i64,
+                    "application/octet-stream",
+                );
+                let response = client.get("B").await.unwrap();
+                let response_content = response.bytes().await.unwrap().to_vec();
+                assert_eq!(content.as_bytes(), response_content);
+            })
+        };
+        test_fresh_dav_server(change_files, &verify_changes).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_rename_directory() {
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                client.mkcol("A").await.unwrap();
+                client.mv("A", "B").await.unwrap();
+            })
+        };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                let listed = client.list("", Depth::Number(1)).await.unwrap();
+                assert_eq!(2, listed.len());
+                expect_directory(&listed[0], "/");
+                expect_directory(&listed[1], "/B/");
             })
         };
         test_fresh_dav_server(change_files, &verify_changes).await

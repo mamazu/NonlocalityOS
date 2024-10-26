@@ -372,8 +372,30 @@ impl OpenDirectory {
         }
     }
 
-    pub async fn rename(&self, _name_here: &str, _there: &OpenDirectory, _name_there: &str) {
-        todo!()
+    pub async fn rename(
+        &self,
+        name_here: &str,
+        there: &OpenDirectory,
+        name_there: &str,
+    ) -> Result<()> {
+        if !std::ptr::eq(self, there) {
+            todo!()
+        }
+        let mut names_locked = self.names.lock().await;
+        match names_locked.get(name_here) {
+            Some(_) => {}
+            None => return Err(Error::NotFound),
+        }
+        match names_locked.get(name_there) {
+            Some(_) => todo!(),
+            None => {
+                info!("Renaming from {} to {} within the directory sends a change event to the directory.", name_here, name_there);
+                self.change_event_sender.send(()).unwrap();
+                let (_obsolete_name, entry) = names_locked.remove_entry(name_here).unwrap();
+                names_locked.insert(name_there.to_string(), entry);
+            }
+        }
+        Ok(())
     }
 
     pub fn wait_for_next_change<'t>(
@@ -808,8 +830,7 @@ impl TreeEditor {
                     &directory_to,
                     &opening_directory_to.1,
                 )
-                .await;
-            Ok(())
+                .await
         })
     }
 }
