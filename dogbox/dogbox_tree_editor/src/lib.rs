@@ -22,6 +22,7 @@ pub enum Error {
     Postcard(postcard::Error),
     ReferenceIndexOutOfRange,
     FileSizeMismatch,
+    CannotRename,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -369,6 +370,10 @@ impl OpenDirectory {
                 Ok(())
             }
         }
+    }
+
+    pub async fn rename(&self, _name_here: &str, _there: &OpenDirectory, _name_there: &str) {
+        todo!()
     }
 
     pub fn wait_for_next_change<'t>(
@@ -773,6 +778,39 @@ impl TreeEditor {
                 })
             }
         }
+    }
+
+    pub fn rename<'a>(&'a self, from: NormalizedPath, to: NormalizedPath) -> Future<'a, ()> {
+        let opening_directory_from = match from.split_right() {
+            PathSplitRightResult::Root => {
+                return Box::pin(std::future::ready(Err(Error::CannotRename)))
+            }
+            PathSplitRightResult::Entry(directory_path, leaf_name) => {
+                (self.root.open_directory(directory_path), leaf_name)
+            }
+        };
+        let opening_directory_to = match to.split_right() {
+            PathSplitRightResult::Root => {
+                return Box::pin(std::future::ready(Err(Error::CannotRename)))
+            }
+            PathSplitRightResult::Entry(directory_path, leaf_name) => {
+                (self.root.open_directory(directory_path), leaf_name)
+            }
+        };
+        Box::pin(async move {
+            let (maybe_directory_from, maybe_directory_to) =
+                futures::join!(opening_directory_from.0, opening_directory_to.0);
+            let directory_from = maybe_directory_from?;
+            let directory_to = maybe_directory_to?;
+            directory_from
+                .rename(
+                    &opening_directory_from.1,
+                    &directory_to,
+                    &opening_directory_to.1,
+                )
+                .await;
+            Ok(())
+        })
     }
 }
 

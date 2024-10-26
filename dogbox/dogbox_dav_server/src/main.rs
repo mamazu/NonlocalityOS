@@ -414,6 +414,27 @@ mod tests {
         };
         test_fresh_dav_server(change_files, &verify_changes).await
     }
+
+    #[test_log::test(tokio::test)]
+    async fn test_rename_root() {
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                assert_eq!(
+                    "reqwest_dav::Error { kind: \"Decode\", source: Server(ServerError { response_code: 403, exception: \"server exception and parse error\", message: \"\" }) }",
+                    format!(
+                        "{:?}",
+                        &client.mv("/", "/test/").await.unwrap_err()));
+            })
+        };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                let listed = client.list("", Depth::Number(1)).await.unwrap();
+                assert_eq!(1, listed.len());
+                expect_directory(&listed[0], "/");
+            })
+        };
+        test_fresh_dav_server(change_files, &verify_changes).await
+    }
 }
 
 #[tokio::main]

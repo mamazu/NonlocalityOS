@@ -139,6 +139,7 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                     dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
+                    dogbox_tree_editor::Error::CannotRename => todo!(),
                 },
             }
         })
@@ -158,6 +159,7 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                     dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
+                    dogbox_tree_editor::Error::CannotRename => todo!(),
                 },
             }
         })
@@ -243,6 +245,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                     dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
+                    dogbox_tree_editor::Error::CannotRename => todo!(),
                 },
             };
             Ok(Box::pin(stream! {
@@ -287,6 +290,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                     dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
+                    dogbox_tree_editor::Error::CannotRename => todo!(),
                 },
             }
         })
@@ -328,6 +332,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                     dogbox_tree_editor::Error::Postcard(_error) => todo!(),
                     dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
                     dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
+                    dogbox_tree_editor::Error::CannotRename => todo!(),
                 },
             }
         })
@@ -352,7 +357,30 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
         _from: &'a dav_server::davpath::DavPath,
         _to: &'a dav_server::davpath::DavPath,
     ) -> dav_server::fs::FsFuture<'a, ()> {
-        todo!()
+        info!("Rename {} to {}", _from, _to);
+        Box::pin(async move {
+            let from_converted_path = convert_path(&_from)?;
+            let to_converted_path = convert_path(&_to)?;
+            match self
+                .editor
+                .rename(
+                    NormalizedPath::new(from_converted_path),
+                    NormalizedPath::new(to_converted_path),
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(error) => match error {
+                    dogbox_tree_editor::Error::NotFound => todo!(),
+                    dogbox_tree_editor::Error::CannotOpenRegularFileAsDirectory => todo!(),
+                    dogbox_tree_editor::Error::CannotOpenDirectoryAsRegularFile => todo!(),
+                    dogbox_tree_editor::Error::Postcard(_error) => todo!(),
+                    dogbox_tree_editor::Error::ReferenceIndexOutOfRange => todo!(),
+                    dogbox_tree_editor::Error::FileSizeMismatch => todo!(),
+                    dogbox_tree_editor::Error::CannotRename => Err(FsError::Forbidden),
+                },
+            }
+        })
     }
 
     fn copy<'a>(
