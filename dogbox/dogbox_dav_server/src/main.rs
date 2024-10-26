@@ -154,7 +154,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     async fn test_fresh_dav_server(
-        run_client: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>>,
+        run_client: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()>>>,
     ) {
         let address = SocketAddr::from(([127, 0, 0, 1], 0));
         let listener = TcpListener::bind(address).await.unwrap();
@@ -164,11 +164,12 @@ mod tests {
         let server_url = format!("http://{}", actual_address);
         let (mut save_status_receiver, server) =
             run_dav_server(listener, &database_file_name).await.unwrap();
+        let client = create_client(server_url);
         tokio::select! {
             result = server => {
                 panic!("Server isn't expected to exit: {:?}", result);
             }
-            _ = run_client(server_url) => {
+            _ = run_client(client) => {
             }
         };
         loop {
@@ -219,9 +220,8 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_file_not_found() {
-        let run_client = |server_url| -> Pin<Box<dyn Future<Output = ()>>> {
-            Box::pin(async {
-                let client = create_client(server_url);
+        let run_client = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
                 let error = client.get("/test.txt").await.unwrap_err();
                 match error {
                     reqwest_dav::Error::Reqwest(_) | reqwest_dav::Error::ReqwestDecode(_) | reqwest_dav::Error::MissingAuthContext => panic!("Unexpected error: {:?}", &error),
@@ -246,9 +246,8 @@ mod tests {
     }
 
     async fn test_create_file(content: Vec<u8>) {
-        let run_client = move |server_url| -> Pin<Box<dyn Future<Output = ()>>> {
+        let run_client = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
             Box::pin(async move {
-                let client = create_client(server_url);
                 let size = content.len() as i64;
                 let file_name = "test.txt";
                 client.put(file_name, content.clone()).await.unwrap();
