@@ -167,11 +167,13 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
 
     fn read_bytes(&mut self, count: usize) -> dav_server::fs::FsFuture<bytes::Bytes> {
         let read_at = self.cursor;
-        self.cursor += count as u64;
         let open_file = self.handle.clone();
         Box::pin(async move {
             match open_file.read_bytes(read_at, count).await {
-                Ok(result) => Ok(result),
+                Ok(result) => {
+                    self.cursor += result.len() as u64;
+                    Ok(result)
+                }
                 Err(error) => match error {
                     dogbox_tree_editor::Error::NotFound(_error) => todo!(),
                     dogbox_tree_editor::Error::CannotOpenRegularFileAsDirectory(_error) => todo!(),

@@ -7,12 +7,13 @@ use astraea::{
 };
 use async_stream::stream;
 use bytes::Buf;
-use dogbox_tree::serialization::{self, DirectoryTree, FileName};
+use dogbox_tree::serialization::{self, DirectoryTree, FileName, SegmentedBlob};
 use futures::FutureExt;
 use std::{
     collections::{BTreeMap, VecDeque},
     pin::Pin,
     sync::Arc,
+    u64,
 };
 use tokio::sync::{Mutex, MutexGuard};
 use tracing::info;
@@ -709,6 +710,35 @@ impl OpenFileContentBlock {
         })
     }
 
+    pub async fn write(
+        &mut self,
+        position_in_block: u16,
+        buf: bytes::Bytes,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> Result<(u16, bytes::Bytes)> {
+        let data = self.access_content(storage).await?;
+        let mut for_extending = match data.split_at_mut_checked(position_in_block as usize) {
+            Some((_, overwriting)) => {
+                let can_overwrite = usize::min(overwriting.len(), buf.len());
+                let mut for_overwriting = buf;
+                let for_extending = for_overwriting.split_off(can_overwrite);
+                for_overwriting.copy_to_slice(overwriting.split_at_mut(can_overwrite).0);
+                for_extending
+            }
+            None => {
+                let previous_content_length = data.len();
+                let zeroes = position_in_block as usize - (previous_content_length as usize);
+                data.extend(std::iter::repeat(0u8).take(zeroes));
+                buf
+            }
+        };
+        let remaining_capacity: u16 = (VALUE_BLOB_MAX_LENGTH as u16 - (data.len() as u16)) as u16;
+        let extension_size = usize::min(for_extending.len(), remaining_capacity as usize);
+        let rest = for_extending.split_off(extension_size);
+        data.extend(for_extending);
+        Ok((extension_size as u16, rest))
+    }
+
     pub async fn store(
         &mut self,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
@@ -717,6 +747,7 @@ impl OpenFileContentBlock {
             OpenFileContentBlock::NotLoaded(blob_digest, _) => Ok(*blob_digest),
             OpenFileContentBlock::Loaded(blob_digest, _vec) => Ok(*blob_digest),
             OpenFileContentBlock::Edited(_blob_digest, vec) => {
+                assert!(vec.len() <= VALUE_BLOB_MAX_LENGTH);
                 storage
                     .store_value(Arc::new(Value::new(
                         ValueBlob::try_from( vec.clone()).unwrap(/*TODO*/),
@@ -754,12 +785,23 @@ impl OpenFileContentBufferLoaded {
         let mut blocks_stored = Vec::new();
         for block in self.blocks.iter_mut() {
             let block_stored = block.store(storage.clone()).await?;
-            blocks_stored.push(block_stored);
+            blocks_stored.push(TypedReference::new(
+                TypeId(u64::MAX),
+                Reference::new(block_stored),
+            ));
         }
-        if blocks_stored.len() != 1 {
-            todo!()
+        if blocks_stored.len() == 1 {
+            return Ok((blocks_stored[0].reference, self.size));
         }
-        Ok((Reference::new(blocks_stored[0]), self.size))
+        let info = SegmentedBlob {
+            size_in_bytes: self.size,
+        };
+        let value = Value::new(
+            ValueBlob::try_from(postcard::to_allocvec(&info).unwrap()).unwrap(),
+            blocks_stored,
+        );
+        let reference = storage.store_value(Arc::new(value))?;
+        Ok((reference, self.size))
     }
 }
 
@@ -811,21 +853,48 @@ impl OpenFileContentBuffer {
     ) -> Result<&'t mut OpenFileContentBufferLoaded> {
         match self {
             OpenFileContentBuffer::NotLoaded { digest, size } => {
-                let blocks = vec![OpenFileContentBlock::Loaded(
-                    *digest,
-                    if *size > 0 {
-                        let file_value =
-                            storage.load_value(&Reference::new(digest.clone())).unwrap(/*TODO*/);
-                        if *size != file_value.blob.as_slice().len() as u64 {
-                            return Err(Error::FileSizeMismatch);
-                        }
-                        // TODO: avoid clone
-                        file_value.blob.as_slice().to_vec()
-                    } else {
-                        // No need to load the content of a file we already know is empty.
-                        vec![]
-                    },
-                )];
+                let blocks = if *size <= VALUE_BLOB_MAX_LENGTH as u64 {
+                    vec![OpenFileContentBlock::NotLoaded(*digest, *size as u16)]
+                } else {
+                    let value = match storage.load_value(&Reference::new(*digest)) {
+                        Some(success) => success,
+                        None => return Err(Error::MissingValue(*digest)),
+                    };
+                    let info: SegmentedBlob = match postcard::from_bytes(&value.blob.as_slice()) {
+                        Ok(success) => success,
+                        Err(error) => return Err(Error::Postcard(error)),
+                    };
+                    if info.size_in_bytes != *size {
+                        todo!()
+                    }
+                    if value.references.len() < 1 {
+                        todo!()
+                    }
+                    let full_blocks = value
+                        .references
+                        .iter()
+                        .take(value.references.len() - 1)
+                        .map(|reference| {
+                            OpenFileContentBlock::NotLoaded(
+                                reference.reference.digest,
+                                VALUE_BLOB_MAX_LENGTH as u16,
+                            )
+                        });
+                    let full_blocks_size = full_blocks.len() as u64 * VALUE_BLOB_MAX_LENGTH as u64;
+                    if full_blocks_size > *size {
+                        todo!()
+                    }
+                    let final_block_size = *size - full_blocks_size;
+                    if final_block_size > VALUE_BLOB_MAX_LENGTH as u64 {
+                        todo!()
+                    }
+                    full_blocks
+                        .chain(std::iter::once(OpenFileContentBlock::NotLoaded(
+                            value.references.last().unwrap().reference.digest,
+                            final_block_size as u16,
+                        )))
+                        .collect()
+                };
                 *self = Self::Loaded(OpenFileContentBufferLoaded {
                     size: *size,
                     blocks: blocks,
@@ -855,7 +924,8 @@ impl OpenFileContentBuffer {
         let next_block_index = first_block_index as usize;
         let block = &mut blocks[next_block_index];
         let data = block.access_content(storage).await?;
-        match data.split_at_checked(position.try_into().unwrap()) {
+        let position_in_block = (position % VALUE_BLOB_MAX_LENGTH as u64) as usize;
+        match data.split_at_checked(position_in_block) {
             Some((_, from_position)) => {
                 return Ok(bytes::Bytes::copy_from_slice(
                     match from_position.split_at_checked(count) {
@@ -879,26 +949,29 @@ impl OpenFileContentBuffer {
         if first_block_index >= (loaded.blocks.len() as u64) {
             todo!()
         }
-        let position_in_block = (position % (VALUE_BLOB_MAX_LENGTH as u64)) as usize;
-        let block = &mut loaded.blocks[first_block_index as usize];
-        let previous_content_length = block.size();
-        let data = block.access_content(storage).await?;
-        match data.split_at_mut_checked(position_in_block) {
-            Some((_, overwriting)) => {
-                let can_overwrite = usize::min(overwriting.len(), buf.len());
-                let (mut for_overwriting, for_extending) = buf.split_at(can_overwrite);
-                for_overwriting.copy_to_slice(overwriting.split_at_mut(can_overwrite).0);
-                data.extend(for_extending);
+        let mut next_block_index = first_block_index as usize;
+        let mut position_in_block = (position % (VALUE_BLOB_MAX_LENGTH as u64)) as u16;
+        let mut remaining_data_to_write = buf;
+        while !remaining_data_to_write.is_empty() {
+            info!(
+                "Write to block {} ({} bytes remaining)",
+                next_block_index,
+                remaining_data_to_write.len()
+            );
+            if next_block_index == loaded.blocks.len() {
+                loaded
+                    .blocks
+                    .push(OpenFileContentBlock::Edited(None, Vec::new()));
             }
-            None => {
-                data.extend(
-                    std::iter::repeat(0u8)
-                        .take(position_in_block - (previous_content_length as usize)),
-                );
-                data.extend(buf);
-            }
-        };
-        loaded.size = data.len() as u64;
+            let block = &mut loaded.blocks[next_block_index];
+            let (size_increased_by, rest) = block
+                .write(position_in_block, remaining_data_to_write, storage.clone())
+                .await?;
+            position_in_block = 0;
+            remaining_data_to_write = rest;
+            loaded.size = loaded.size + size_increased_by as u64;
+            next_block_index += 1;
+        }
         Ok(())
     }
 
@@ -963,6 +1036,7 @@ impl OpenFile {
             content_locked
                 .read(position, count, self.storage.clone())
                 .await
+                .inspect(|bytes_read| info!("Read {} bytes", bytes_read.len()))
         })
     }
 
