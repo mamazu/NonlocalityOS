@@ -98,9 +98,17 @@ mod tests {
             println!("{}", &warning);
         }
         println!("Container ID: {}", container_created.id);
+
+        // there isn't really documentation for the podman API
+        let expected_status = match podman.version().await.unwrap().version.unwrap().as_str() {
+            "3.4.4" => "configured",
+            "5.2.2" => "created",
+            _ => todo!(),
+        };
+
         let container = podman.containers().get(container_created.id.clone());
         assert_eq!(
-            Some("configured"),
+            Some(expected_status),
             container
                 .inspect()
                 .await
