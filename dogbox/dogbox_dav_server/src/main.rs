@@ -330,8 +330,21 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_create_file_with_content() {
+    async fn test_create_file_with_small_content() {
         test_create_file(vec![b'a']).await
+    }
+
+    fn random_bytes(len: usize) -> Vec<u8> {
+        use rand::rngs::SmallRng;
+        use rand::Rng;
+        use rand::SeedableRng;
+        let mut small_rng = SmallRng::from_entropy();
+        (0..len).map(|_| small_rng.gen()).collect()
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_create_file_with_large_content() {
+        test_create_file(random_bytes(64_000)).await
     }
 
     #[test_log::test(tokio::test)]

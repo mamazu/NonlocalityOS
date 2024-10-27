@@ -29,3 +29,4 @@ rusqlite = {version = "0", features = ["bundled"]}
 [dev-dependencies]
 reqwest_dav = "0"
 test-log = {version = "0", features = ["trace", "log", "color"]}
+rand = "0"
