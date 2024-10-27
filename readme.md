@@ -2,7 +2,11 @@
 
 * install Rust: <https://www.rust-lang.org/learn/get-started> (tested with Rust 1.84.0)
 * restart your terminal
-* install the `coverage-gutters` VS Code extension <https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters>
+* install `sccache` by running `cargo --verbose install sccache`
+
+## Visual Studio Code
+
+* install the `rust-analyzer` VS Code extension
 
 ## Windows
 
@@ -16,41 +20,50 @@
 * `sudo apt install build-essential libssl-dev podman`
 * restart your terminal
 
-# Test
+# Tests
 
-* run `./test.sh`
-* on success it will print `Success!` in the end
+## Run tests once
 
-# Watch code and keep running tests
+* `cargo nextest run`
 
-## Linux
+### Linux
+
+* `./test.sh`
+
+### Windows
+
+* `test.bat`
+
+## Watch code and keep running tests
+
+### Linux
 
 * `./watch_cargo_tests.sh`
 
-## Windows
+### Windows
 
 * `watch_cargo_tests.bat`
 
-# Coverage
+# Test coverage
 
-## Linux
+## One time
 
-* run `./coverage.sh`
+* `bacon coverage`
 
-## Windows
+## Watch code and keep running tests to measure test coverage
 
-* run `coverage.bat`
+### Windows
+
+* `watch_coverage.bat`
+
+## Visual Studio Code extension
+
+* install the `coverage-gutters` VS Code extension <https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters> to visualize coverage in the code editor.
+
+## HTML report
+
+After measuring the test coverage, you can find [an HTML report under `target-coverage/tarpaulin-report.html`](target-coverage/tarpaulin-report.html).
 
 # Formatting code
 
-## Linux
-
-* run `./test.sh` or `./build.sh`
-
-## Windows
-
-* run `test.bat` or `build.bat`
-
-## Visual Studio Code
-
-* install the `rust-analyzer` VS Code extension
+* `cargo fmt`

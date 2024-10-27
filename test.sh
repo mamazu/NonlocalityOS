@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-./astra.sh test || exit 1
+cargo nextest run || exit 1

@@ -2,6 +2,5 @@
 /target-coverage
 /coverage
 /.idea
-/build_rs_cov.profraw
-/lcov.info
 /dogbox_dav_server.sqlite
+/build_rs_cov.profraw

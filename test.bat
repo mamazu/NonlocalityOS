@@ -1,2 +1,2 @@
 @echo off
-call .\astra.bat test || exit /B 1
+cargo nextest run || exit /B 1
