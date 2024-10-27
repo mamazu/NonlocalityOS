@@ -2,7 +2,7 @@
 ./install_sccache.sh || exit 1
 
 export RUSTC_WRAPPER=sccache
-cargo install --version 0.31.2 cargo-tarpaulin || exit 1
+cargo install --version 0.31.2 --locked cargo-tarpaulin || exit 1
 
 sccache --zero-stats || exit 1
 
