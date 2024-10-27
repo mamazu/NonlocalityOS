@@ -187,3 +187,9 @@ impl DirectoryTree {
         DirectoryTree { children }
     }
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SegmentedBlob {
+    // redundant size info to detect inconsistencies
+    pub size_in_bytes: u64,
+}

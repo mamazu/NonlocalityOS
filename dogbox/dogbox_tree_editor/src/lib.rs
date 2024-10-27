@@ -1,6 +1,9 @@
 use astraea::{
     storage::{LoadStoreValue, StoreError},
-    tree::{BlobDigest, Reference, ReferenceIndex, TypeId, TypedReference, Value, ValueBlob},
+    tree::{
+        BlobDigest, Reference, ReferenceIndex, TypeId, TypedReference, Value, ValueBlob,
+        VALUE_BLOB_MAX_LENGTH,
+    },
 };
 use async_stream::stream;
 use bytes::Buf;
@@ -23,6 +26,7 @@ pub enum Error {
     ReferenceIndexOutOfRange,
     FileSizeMismatch,
     CannotRename,
+    MissingValue(BlobDigest),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -232,7 +236,7 @@ impl OpenDirectory {
                     DirectoryEntryKind::Directory => todo!(),
                     DirectoryEntryKind::File(length) => {
                         let open_file = Arc::new(OpenFile::new(
-                            OpenFileContentBuffer::new(Some(digest.clone()), *length, None, false),
+                            OpenFileContentBuffer::from_storage(digest.clone(), *length),
                             self.storage.clone(),
                         ));
                         *found = NamedEntry::OpenRegularFile(open_file.clone());
@@ -249,7 +253,7 @@ impl OpenDirectory {
             },
             None => {
                 let open_file = Arc::new(OpenFile::new(
-                    OpenFileContentBuffer::new(None, 0, Some(vec![]), true),
+                    OpenFileContentBuffer::from_data(vec![]).unwrap(),
                     self.storage.clone(),
                 ));
                 info!("Adding file {} to the directory which sends a change event for its parent directory.", &name);
@@ -670,30 +674,125 @@ pub struct OpenFileStatus {
 }
 
 #[derive(Debug)]
-pub struct OpenFileContentBuffer {
-    digest: Option<BlobDigest>,
+pub enum OpenFileContentBlock {
+    NotLoaded(BlobDigest, u16),
+    Loaded(BlobDigest, Vec<u8>),
+    Edited(Option<BlobDigest>, Vec<u8>),
+}
+
+impl OpenFileContentBlock {
+    pub async fn access_content<'t>(
+        &'t mut self,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> Result<&'t mut Vec<u8>> {
+        match self {
+            OpenFileContentBlock::NotLoaded(blob_digest, size) => {
+                let loaded = match storage.load_value(&Reference::new(*blob_digest)) {
+                    Some(success) => success,
+                    None => return Err(Error::MissingValue(*blob_digest)),
+                };
+                if loaded.blob.as_slice().len() != *size as usize {
+                    return Err(Error::FileSizeMismatch);
+                }
+                *self = OpenFileContentBlock::Loaded(
+                    *blob_digest,
+                    /*TODO: avoid cloning*/ loaded.blob.as_slice().to_vec(),
+                );
+            }
+            OpenFileContentBlock::Loaded(_blob_digest, _vec) => {}
+            OpenFileContentBlock::Edited(_blob_digest, _vec) => {}
+        }
+        Ok(match self {
+            OpenFileContentBlock::NotLoaded(_blob_digest, _) => panic!(),
+            OpenFileContentBlock::Loaded(_blob_digest, vec) => vec,
+            OpenFileContentBlock::Edited(_blob_digest, vec) => vec,
+        })
+    }
+
+    pub async fn store(
+        &mut self,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> std::result::Result<BlobDigest, StoreError> {
+        match self {
+            OpenFileContentBlock::NotLoaded(blob_digest, _) => Ok(*blob_digest),
+            OpenFileContentBlock::Loaded(blob_digest, _vec) => Ok(*blob_digest),
+            OpenFileContentBlock::Edited(_blob_digest, vec) => {
+                storage
+                    .store_value(Arc::new(Value::new(
+                        ValueBlob::try_from( vec.clone()).unwrap(/*TODO*/),
+                        vec![],
+                    )))
+                    .map(|success| success.digest)
+            }
+        }
+    }
+
+    pub fn size(&self) -> u16 {
+        match self {
+            OpenFileContentBlock::NotLoaded(_blob_digest, size) => *size,
+            OpenFileContentBlock::Loaded(_blob_digest, vec) => vec.len() as u16,
+            OpenFileContentBlock::Edited(_blob_digest, vec) => vec.len() as u16,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct OpenFileContentBufferLoaded {
     size: u64,
-    data: Option<Vec<u8>>,
-    has_uncommitted_changes: bool,
+    blocks: Vec<OpenFileContentBlock>,
+}
+
+impl OpenFileContentBufferLoaded {
+    pub fn new(size: u64, blocks: Vec<OpenFileContentBlock>) -> Self {
+        Self { size, blocks }
+    }
+
+    pub async fn store(
+        &mut self,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> std::result::Result<(Reference, u64), StoreError> {
+        let mut blocks_stored = Vec::new();
+        for block in self.blocks.iter_mut() {
+            let block_stored = block.store(storage.clone()).await?;
+            blocks_stored.push(block_stored);
+        }
+        if blocks_stored.len() != 1 {
+            todo!()
+        }
+        Ok((Reference::new(blocks_stored[0]), self.size))
+    }
+}
+
+#[derive(Debug)]
+pub enum OpenFileContentBuffer {
+    NotLoaded { digest: BlobDigest, size: u64 },
+    Loaded(OpenFileContentBufferLoaded),
 }
 
 impl OpenFileContentBuffer {
-    pub fn new(
-        digest: Option<BlobDigest>,
-        size: u64,
-        data: Option<Vec<u8>>,
-        has_uncommitted_changes: bool,
-    ) -> Self {
-        Self {
-            digest,
-            size,
-            data,
-            has_uncommitted_changes,
+    pub fn from_storage(digest: BlobDigest, size: u64) -> Self {
+        Self::NotLoaded {
+            digest: digest,
+            size: size,
+        }
+    }
+
+    pub fn from_data(data: Vec<u8>) -> Option<Self> {
+        if data.len() > VALUE_BLOB_MAX_LENGTH {
+            None
+        } else {
+            Some(Self::Loaded(OpenFileContentBufferLoaded {
+                size: data.len() as u64,
+                blocks: vec![OpenFileContentBlock::Edited(None, data)],
+            }))
         }
     }
 
     pub fn size(&self) -> u64 {
-        self.size
+        match self {
+            OpenFileContentBuffer::NotLoaded { digest: _, size } => *size,
+            OpenFileContentBuffer::Loaded(OpenFileContentBufferLoaded { size, blocks: _ }) => *size,
+        }
     }
 
     pub async fn read(
@@ -702,79 +801,119 @@ impl OpenFileContentBuffer {
         count: usize,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     ) -> Result<bytes::Bytes> {
-        match self.data {
-            Some(_) => { // nothing to do
-            }
-            None => {
-                self.data = Some(if self.size > 0 {
-                    let file_value = storage.load_value(&Reference::new(self.digest.unwrap(/*TODO*/))).unwrap(/*TODO*/);
-                    if self.size != file_value.blob.as_slice().len() as u64 {
-                        return Err(Error::FileSizeMismatch);
-                    }
-                    // TODO: avoid clone
-                    file_value.blob.as_slice().to_vec()
-                } else {
-                    // No need to load the content of a file we already know is empty.
-                    vec![]
+        let loaded = self.require_loaded(storage.clone()).await?;
+        Self::read_from_blocks(&mut loaded.blocks, position, count, storage).await
+    }
+
+    async fn require_loaded<'t>(
+        &'t mut self,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> Result<&'t mut OpenFileContentBufferLoaded> {
+        match self {
+            OpenFileContentBuffer::NotLoaded { digest, size } => {
+                let blocks = vec![OpenFileContentBlock::Loaded(
+                    *digest,
+                    if *size > 0 {
+                        let file_value =
+                            storage.load_value(&Reference::new(digest.clone())).unwrap(/*TODO*/);
+                        if *size != file_value.blob.as_slice().len() as u64 {
+                            return Err(Error::FileSizeMismatch);
+                        }
+                        // TODO: avoid clone
+                        file_value.blob.as_slice().to_vec()
+                    } else {
+                        // No need to load the content of a file we already know is empty.
+                        vec![]
+                    },
+                )];
+                *self = Self::Loaded(OpenFileContentBufferLoaded {
+                    size: *size,
+                    blocks: blocks,
                 });
             }
+            OpenFileContentBuffer::Loaded(_loaded) => {}
         }
+        match self {
+            OpenFileContentBuffer::NotLoaded { digest: _, size: _ } => panic!(),
+            OpenFileContentBuffer::Loaded(open_file_content_buffer_loaded) => {
+                Ok(open_file_content_buffer_loaded)
+            }
+        }
+    }
 
-        let data = self.data.as_ref().unwrap();
+    async fn read_from_blocks(
+        blocks: &mut Vec<OpenFileContentBlock>,
+        position: u64,
+        count: usize,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> Result<bytes::Bytes> {
+        let block_size = VALUE_BLOB_MAX_LENGTH;
+        let first_block_index = position / (block_size as u64);
+        if first_block_index >= (blocks.len() as u64) {
+            todo!()
+        }
+        let next_block_index = first_block_index as usize;
+        let block = &mut blocks[next_block_index];
+        let data = block.access_content(storage).await?;
         match data.split_at_checked(position.try_into().unwrap()) {
-            Some((_, from_position)) => Ok(bytes::Bytes::copy_from_slice(
-                match from_position.split_at_checked(count) {
-                    Some((result, _)) => result,
-                    None => from_position,
-                },
-            )),
+            Some((_, from_position)) => {
+                return Ok(bytes::Bytes::copy_from_slice(
+                    match from_position.split_at_checked(count) {
+                        Some((result, _)) => result,
+                        None => from_position,
+                    },
+                ))
+            }
             None => todo!(),
         }
     }
 
-    pub async fn write(&mut self, position: u64, buf: bytes::Bytes) {
-        let position_usize = position.try_into().unwrap();
-        match &mut self.data {
-            Some(data) => {
-                let previous_content_length = data.len();
-                match data.split_at_mut_checked(position_usize) {
-                    Some((_, overwriting)) => {
-                        let can_overwrite = usize::min(overwriting.len(), buf.len());
-                        let (mut for_overwriting, for_extending) = buf.split_at(can_overwrite);
-                        for_overwriting.copy_to_slice(overwriting.split_at_mut(can_overwrite).0);
-                        data.extend(for_extending);
-                    }
-                    None => {
-                        data.extend(
-                            std::iter::repeat(0u8).take(position_usize - previous_content_length),
-                        );
-                        data.extend(buf);
-                    }
-                };
-                self.size = data.len() as u64;
-                self.has_uncommitted_changes = true;
-            }
-            None => todo!(),
+    pub async fn write(
+        &mut self,
+        position: u64,
+        buf: bytes::Bytes,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> Result<()> {
+        let loaded = self.require_loaded(storage.clone()).await?;
+        let first_block_index = position / (VALUE_BLOB_MAX_LENGTH as u64);
+        if first_block_index >= (loaded.blocks.len() as u64) {
+            todo!()
         }
+        let position_in_block = (position % (VALUE_BLOB_MAX_LENGTH as u64)) as usize;
+        let block = &mut loaded.blocks[first_block_index as usize];
+        let previous_content_length = block.size();
+        let data = block.access_content(storage).await?;
+        match data.split_at_mut_checked(position_in_block) {
+            Some((_, overwriting)) => {
+                let can_overwrite = usize::min(overwriting.len(), buf.len());
+                let (mut for_overwriting, for_extending) = buf.split_at(can_overwrite);
+                for_overwriting.copy_to_slice(overwriting.split_at_mut(can_overwrite).0);
+                data.extend(for_extending);
+            }
+            None => {
+                data.extend(
+                    std::iter::repeat(0u8)
+                        .take(position_in_block - (previous_content_length as usize)),
+                );
+                data.extend(buf);
+            }
+        };
+        loaded.size = data.len() as u64;
+        Ok(())
     }
 
     pub async fn store(
         &mut self,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     ) -> std::result::Result<(Reference, u64), StoreError> {
-        let result = match &self.data {
-            Some(data) => {
-                let maybe_content_reference = storage.store_value(Arc::new(Value::new(
-                    ValueBlob::try_from( data.clone()).unwrap(/*TODO*/),
-                    vec![],
-                )));
-                maybe_content_reference
-                    .map(|content_reference| (content_reference, data.len() as u64))
+        match self {
+            OpenFileContentBuffer::Loaded(open_file_content_buffer_loaded) => {
+                open_file_content_buffer_loaded.store(storage).await
             }
-            None => Ok((Reference::new(self.digest.unwrap()), self.size)),
-        };
-        self.has_uncommitted_changes = false;
-        result
+            OpenFileContentBuffer::NotLoaded { digest, size } => {
+                Ok((Reference::new(*digest), *size))
+            }
+        }
     }
 }
 
@@ -808,7 +947,9 @@ impl OpenFile {
         info!("Write at {}: {} bytes", position, buf.len());
         Box::pin(async move {
             let mut content_locked = self.content.lock().await;
-            content_locked.write(position, buf).await;
+            content_locked
+                .write(position, buf, self.storage.clone())
+                .await?;
             info!("Writing to file sends a change event for this file.");
             self.change_event_sender.send(()).unwrap();
             Ok(())

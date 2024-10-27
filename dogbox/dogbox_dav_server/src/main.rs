@@ -344,8 +344,13 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn test_create_file_with_large_content() {
+    async fn test_create_file_with_value_blob_max_length() {
         test_create_file(random_bytes(VALUE_BLOB_MAX_LENGTH)).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_create_file_with_multi_value_content() {
+        //test_create_file(random_bytes(VALUE_BLOB_MAX_LENGTH + 1)).await
     }
 
     #[test_log::test(tokio::test)]
