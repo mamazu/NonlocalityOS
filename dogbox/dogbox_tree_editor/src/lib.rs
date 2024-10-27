@@ -41,6 +41,18 @@ pub enum DirectoryEntryKind {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct DirectoryEntryMetaData {
+    pub kind: DirectoryEntryKind,
+    pub modified: std::time::SystemTime,
+}
+
+impl DirectoryEntryMetaData {
+    pub fn new(kind: DirectoryEntryKind, modified: std::time::SystemTime) -> Self {
+        Self { kind, modified }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct DirectoryEntry {
     pub name: String,
     pub kind: DirectoryEntryKind,
@@ -57,11 +69,16 @@ impl DirectoryEntry {
 pub struct MutableDirectoryEntry {
     pub name: String,
     pub kind: DirectoryEntryKind,
+    pub modified: std::time::SystemTime,
 }
 
 impl MutableDirectoryEntry {
-    pub fn new(name: String, kind: DirectoryEntryKind) -> Self {
-        Self { name, kind }
+    pub fn new(name: String, kind: DirectoryEntryKind, modified: std::time::SystemTime) -> Self {
+        Self {
+            name,
+            kind,
+            modified,
+        }
     }
 }
 
@@ -77,17 +94,20 @@ pub enum NamedEntryStatus {
 
 #[derive(Clone, Debug)]
 pub enum NamedEntry {
-    NotOpen(DirectoryEntryKind, BlobDigest),
+    NotOpen(DirectoryEntryMetaData, BlobDigest),
     OpenRegularFile(Arc<OpenFile>),
     OpenSubdirectory(Arc<OpenDirectory>),
 }
 
 impl NamedEntry {
-    async fn get_meta_data(&self) -> DirectoryEntryKind {
+    async fn get_meta_data(&self) -> DirectoryEntryMetaData {
         match self {
-            NamedEntry::NotOpen(kind, _) => kind.clone(),
+            NamedEntry::NotOpen(meta_data, _) => meta_data.clone(),
             NamedEntry::OpenRegularFile(open_file) => open_file.get_meta_data().await,
-            NamedEntry::OpenSubdirectory(_) => DirectoryEntryKind::Directory,
+            NamedEntry::OpenSubdirectory(open_directory) => DirectoryEntryMetaData::new(
+                DirectoryEntryKind::Directory,
+                open_directory.modified(),
+            ),
         }
     }
 
@@ -100,9 +120,9 @@ impl NamedEntry {
         >,
     ) {
         match self {
-            NamedEntry::NotOpen(directory_entry_kind, blob_digest) => (
+            NamedEntry::NotOpen(directory_entry_meta_data, blob_digest) => (
                 Ok(NamedEntryStatus::Closed(
-                    match *directory_entry_kind {
+                    match directory_entry_meta_data.kind {
                         DirectoryEntryKind::Directory => {
                             serialization::DirectoryEntryKind::Directory
                         }
@@ -139,6 +159,8 @@ impl NamedEntry {
         }
     }
 }
+
+pub type WallClock = fn() -> std::time::SystemTime;
 
 #[derive(PartialEq, Debug)]
 pub struct OpenDirectoryStatus {
@@ -177,12 +199,16 @@ pub struct OpenDirectory {
     storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     change_event_sender: tokio::sync::watch::Sender<()>,
     _change_event_receiver: tokio::sync::watch::Receiver<()>,
+    modified: std::time::SystemTime,
+    clock: WallClock,
 }
 
 impl OpenDirectory {
     pub fn new(
         names: tokio::sync::Mutex<BTreeMap<String, NamedEntry>>,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+        modified: std::time::SystemTime,
+        clock: WallClock,
     ) -> Self {
         let (change_event_sender, change_event_receiver) = tokio::sync::watch::channel(());
         Self {
@@ -190,20 +216,36 @@ impl OpenDirectory {
             storage,
             change_event_sender,
             _change_event_receiver: change_event_receiver,
+            modified,
+            clock,
         }
     }
 
     pub fn from_entries(
         entries: Vec<DirectoryEntry>,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+        modified: std::time::SystemTime,
+        clock: WallClock,
     ) -> OpenDirectory {
         let names = BTreeMap::from_iter(entries.iter().map(|entry| {
             (
                 entry.name.clone(),
-                NamedEntry::NotOpen(entry.kind.clone(), entry.digest),
+                NamedEntry::NotOpen(
+                    DirectoryEntryMetaData::new(entry.kind.clone(), modified),
+                    entry.digest,
+                ),
             )
         }));
-        OpenDirectory::new(tokio::sync::Mutex::new(names), storage.clone())
+        OpenDirectory::new(
+            tokio::sync::Mutex::new(names),
+            storage.clone(),
+            modified,
+            clock,
+        )
+    }
+
+    pub fn modified(&self) -> std::time::SystemTime {
+        self.modified
     }
 
     async fn read(&self) -> Stream<MutableDirectoryEntry> {
@@ -212,13 +254,13 @@ impl OpenDirectory {
         info!("Reading directory with {} entries", snapshot.len());
         Box::pin(stream! {
             for cached_entry in snapshot {
-                let kind = cached_entry.1.get_meta_data().await;
-                yield MutableDirectoryEntry{name: cached_entry.0, kind: kind};
+                let meta_data = cached_entry.1.get_meta_data().await;
+                yield MutableDirectoryEntry{name: cached_entry.0, kind: meta_data.kind, modified: meta_data.modified,};
             }
         })
     }
 
-    async fn get_meta_data(&self, name: &str) -> Result<DirectoryEntryKind> {
+    async fn get_meta_data(&self, name: &str) -> Result<DirectoryEntryMetaData> {
         let names_locked = self.names.lock().await;
         match names_locked.get(name) {
             Some(found) => {
@@ -233,12 +275,13 @@ impl OpenDirectory {
         let mut names_locked = self.names.lock().await;
         match names_locked.get_mut(name) {
             Some(found) => match found {
-                NamedEntry::NotOpen(kind, digest) => match kind {
+                NamedEntry::NotOpen(meta_data, digest) => match meta_data.kind {
                     DirectoryEntryKind::Directory => todo!(),
                     DirectoryEntryKind::File(length) => {
                         let open_file = Arc::new(OpenFile::new(
-                            OpenFileContentBuffer::from_storage(digest.clone(), *length),
+                            OpenFileContentBuffer::from_storage(digest.clone(), length),
                             self.storage.clone(),
+                            self.modified,
                         ));
                         *found = NamedEntry::OpenRegularFile(open_file.clone());
                         info!(
@@ -256,6 +299,7 @@ impl OpenDirectory {
                 let open_file = Arc::new(OpenFile::new(
                     OpenFileContentBuffer::from_data(vec![]).unwrap(),
                     self.storage.clone(),
+                    (self.clock)(),
                 ));
                 info!("Adding file {} to the directory which sends a change event for its parent directory.", &name);
                 names_locked.insert(
@@ -271,6 +315,8 @@ impl OpenDirectory {
     pub async fn load_directory(
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
         digest: &BlobDigest,
+        modified: std::time::SystemTime,
+        clock: WallClock,
     ) -> Result<Arc<OpenDirectory>> {
         match storage.load_value(&Reference::new(*digest)) {
             Some(loaded) => {
@@ -305,7 +351,9 @@ impl OpenDirectory {
                     let entry = maybe_entry?;
                     entries.push(entry);
                 }
-                Ok(Arc::new(OpenDirectory::from_entries(entries, storage)))
+                Ok(Arc::new(OpenDirectory::from_entries(
+                    entries, storage, modified, clock,
+                )))
             }
             None => todo!(),
         }
@@ -316,10 +364,15 @@ impl OpenDirectory {
         match names_locked.get_mut(&name) {
             Some(found) => {
                 match found {
-                    NamedEntry::NotOpen(kind, digest) => match kind {
+                    NamedEntry::NotOpen(meta_data, digest) => match meta_data.kind {
                         DirectoryEntryKind::Directory => {
-                            let subdirectory =
-                                Self::load_directory(self.storage.clone(), digest).await?;
+                            let subdirectory = Self::load_directory(
+                                self.storage.clone(),
+                                digest,
+                                self.modified,
+                                self.clock,
+                            )
+                            .await?;
                             *found = NamedEntry::OpenSubdirectory(subdirectory.clone());
                             info!("Opening directory {} sends a change event for its parent directory.", &name);
                             self.change_event_sender.send(()).unwrap();
@@ -368,6 +421,8 @@ impl OpenDirectory {
                     NamedEntry::OpenSubdirectory(Arc::new(OpenDirectory::new(
                         Mutex::new(BTreeMap::new()),
                         self.storage.clone(),
+                        (self.clock)(),
+                        self.clock,
                     ))),
                 );
                 Ok(())
@@ -996,12 +1051,14 @@ pub struct OpenFile {
     storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     change_event_sender: tokio::sync::watch::Sender<()>,
     _change_event_receiver: tokio::sync::watch::Receiver<()>,
+    modified: std::time::SystemTime,
 }
 
 impl OpenFile {
     pub fn new(
         content: OpenFileContentBuffer,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+        modified: std::time::SystemTime,
     ) -> OpenFile {
         let (sender, receiver) = tokio::sync::watch::channel(());
         OpenFile {
@@ -1009,11 +1066,19 @@ impl OpenFile {
             storage: storage,
             change_event_sender: sender,
             _change_event_receiver: receiver,
+            modified,
         }
     }
 
-    pub async fn get_meta_data(&self) -> DirectoryEntryKind {
-        DirectoryEntryKind::File(self.content.lock().await.size())
+    pub fn modified(&self) -> std::time::SystemTime {
+        self.modified
+    }
+
+    pub async fn get_meta_data(&self) -> DirectoryEntryMetaData {
+        DirectoryEntryMetaData::new(
+            DirectoryEntryKind::File(self.content.lock().await.size()),
+            self.modified,
+        )
     }
 
     pub fn write_bytes(&self, position: u64, buf: bytes::Bytes) -> Future<()> {
@@ -1090,11 +1155,11 @@ impl TreeEditor {
         Ok(directory.read().await)
     }
 
-    pub fn get_meta_data<'a>(&self, path: NormalizedPath) -> Future<'a, DirectoryEntryKind> {
+    pub fn get_meta_data<'a>(&self, path: NormalizedPath) -> Future<'a, DirectoryEntryMetaData> {
         match path.split_right() {
-            PathSplitRightResult::Root => {
-                Box::pin(std::future::ready(Ok(DirectoryEntryKind::Directory)))
-            }
+            PathSplitRightResult::Root => Box::pin(std::future::ready(Ok(
+                DirectoryEntryMetaData::new(DirectoryEntryKind::Directory, self.root.modified()),
+            ))),
             PathSplitRightResult::Entry(directory_path, leaf_name) => {
                 let root = self.root.clone();
                 Box::pin(async move {
@@ -1192,15 +1257,22 @@ mod tests {
     use super::*;
     use astraea::storage::{InMemoryValueStorage, LoadValue, StoreValue};
 
+    fn test_clock() -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+
     #[tokio::test]
     async fn test_open_directory_get_meta_data() {
-        let expected = DirectoryEntryKind::File(12);
+        let modified = test_clock();
+        let expected = DirectoryEntryMetaData::new(DirectoryEntryKind::File(12), modified);
         let directory = OpenDirectory::new(
             tokio::sync::Mutex::new(BTreeMap::from([(
                 "test.txt".to_string(),
                 NamedEntry::NotOpen(expected.clone(), BlobDigest::hash(&[])),
             )])),
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         );
         let meta_data = directory.get_meta_data("test.txt").await.unwrap();
         assert_eq!(expected, meta_data);
@@ -1208,7 +1280,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_open_directory_wait_for_next_change() {
-        let expected = DirectoryEntryKind::File(12);
+        let modified = test_clock();
+        let expected = DirectoryEntryMetaData::new(DirectoryEntryKind::File(12), modified);
         let storage = Arc::new(InMemoryValueStorage::empty());
         let directory = OpenDirectory::new(
             tokio::sync::Mutex::new(BTreeMap::from([(
@@ -1216,6 +1289,8 @@ mod tests {
                 NamedEntry::NotOpen(expected.clone(), BlobDigest::hash(&[])),
             )])),
             storage.clone(),
+            modified,
+            test_clock,
         );
         let (maybe_status, _change_event_future) = directory.wait_for_next_change().await;
         assert_eq!(
@@ -1239,15 +1314,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_open_directory_open_file() {
+        let modified = test_clock();
         let directory = OpenDirectory::new(
             tokio::sync::Mutex::new(BTreeMap::new()),
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         );
         let file_name = "test.txt";
         let opened = directory.open_file(file_name).await.unwrap();
         opened.flush();
         assert_eq!(
-            DirectoryEntryKind::File(0),
+            DirectoryEntryMetaData::new(DirectoryEntryKind::File(0), modified),
             directory.get_meta_data(file_name).await.unwrap()
         );
         use futures::StreamExt;
@@ -1255,7 +1333,8 @@ mod tests {
         assert_eq!(
             &[MutableDirectoryEntry {
                 name: file_name.to_string(),
-                kind: DirectoryEntryKind::File(0)
+                kind: DirectoryEntryKind::File(0),
+                modified: modified,
             }][..],
             &directory_entries[..]
         );
@@ -1263,9 +1342,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_directory_after_file_write() {
+        let modified = test_clock();
         let directory = OpenDirectory::new(
             tokio::sync::Mutex::new(BTreeMap::new()),
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         );
         let file_name = "test.txt";
         let opened = directory.open_file(file_name).await.unwrap();
@@ -1276,7 +1358,8 @@ mod tests {
         assert_eq!(
             &[MutableDirectoryEntry {
                 name: file_name.to_string(),
-                kind: DirectoryEntryKind::File(file_content.len() as u64)
+                kind: DirectoryEntryKind::File(file_content.len() as u64),
+                modified,
             }][..],
             &directory_entries[..]
         );
@@ -1284,16 +1367,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_meta_data_after_file_write() {
+        let modified = test_clock();
         let directory = OpenDirectory::new(
             tokio::sync::Mutex::new(BTreeMap::new()),
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         );
         let file_name = "test.txt";
         let opened = directory.open_file(file_name).await.unwrap();
         let file_content = &b"hello world"[..];
         opened.write_bytes(0, file_content.into()).await.unwrap();
         assert_eq!(
-            DirectoryEntryKind::File(file_content.len() as u64),
+            DirectoryEntryMetaData::new(
+                DirectoryEntryKind::File(file_content.len() as u64),
+                modified
+            ),
             directory.get_meta_data(file_name).await.unwrap()
         );
     }
@@ -1301,9 +1390,12 @@ mod tests {
     #[tokio::test]
     async fn test_read_empty_root() {
         use futures::StreamExt;
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         let mut directory = editor
             .read_directory(NormalizedPath::new(relative_path::RelativePath::new("/")))
@@ -1337,22 +1429,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_meta_data_of_root() {
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         let meta_data = editor
             .get_meta_data(NormalizedPath::new(relative_path::RelativePath::new("/")))
             .await
             .unwrap();
-        assert_eq!(DirectoryEntryKind::Directory, meta_data);
+        assert_eq!(
+            DirectoryEntryMetaData::new(DirectoryEntryKind::Directory, modified),
+            meta_data
+        );
     }
 
     #[tokio::test]
     async fn test_get_meta_data_of_non_normalized_path() {
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         let error = editor
             .get_meta_data(NormalizedPath::new(relative_path::RelativePath::new(
@@ -1365,9 +1466,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_meta_data_of_unknown_path() {
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         let error = editor
             .get_meta_data(NormalizedPath::new(relative_path::RelativePath::new(
@@ -1380,9 +1484,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_meta_data_of_unknown_path_in_unknown_directory() {
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         let error = editor
             .get_meta_data(NormalizedPath::new(relative_path::RelativePath::new(
@@ -1395,6 +1502,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_directory_on_closed_regular_file() {
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![DirectoryEntry {
                 name: "test.txt".to_string(),
@@ -1402,6 +1510,8 @@ mod tests {
                 digest: BlobDigest::hash(b"TEST"),
             }],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         let result = editor
             .read_directory(NormalizedPath::new(relative_path::RelativePath::new(
@@ -1419,6 +1529,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_directory_on_open_regular_file() {
         use relative_path::RelativePath;
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![DirectoryEntry {
                 name: "test.txt".to_string(),
@@ -1426,6 +1537,8 @@ mod tests {
                 digest: BlobDigest::hash(b""),
             }],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         let _open_file = editor
             .open_file(NormalizedPath::new(RelativePath::new("/test.txt")))
@@ -1446,9 +1559,12 @@ mod tests {
     async fn test_create_directory() {
         use futures::StreamExt;
         use relative_path::RelativePath;
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         editor
             .create_directory(NormalizedPath::new(RelativePath::new("/test")))
@@ -1463,6 +1579,7 @@ mod tests {
             MutableDirectoryEntry {
                 name: "test".to_string(),
                 kind: DirectoryEntryKind::Directory,
+                modified,
             },
             entry
         );
@@ -1474,9 +1591,12 @@ mod tests {
     async fn test_read_created_directory() {
         use futures::StreamExt;
         use relative_path::RelativePath;
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         editor
             .create_directory(NormalizedPath::new(RelativePath::new("/test")))
@@ -1494,9 +1614,12 @@ mod tests {
     async fn test_nested_create_directory() {
         use futures::StreamExt;
         use relative_path::RelativePath;
+        let modified = test_clock();
         let editor = TreeEditor::new(Arc::new(OpenDirectory::from_entries(
             vec![],
             Arc::new(NeverUsedStorage {}),
+            modified,
+            test_clock,
         )));
         editor
             .create_directory(NormalizedPath::new(RelativePath::new("/test")))
@@ -1527,7 +1650,8 @@ mod tests {
             assert_eq!(
                 MutableDirectoryEntry {
                     name: "subdir".to_string(),
-                    kind: DirectoryEntryKind::Directory
+                    kind: DirectoryEntryKind::Directory,
+                    modified,
                 },
                 entry
             );
@@ -1543,7 +1667,8 @@ mod tests {
             assert_eq!(
                 MutableDirectoryEntry {
                     name: "test".to_string(),
-                    kind: DirectoryEntryKind::Directory
+                    kind: DirectoryEntryKind::Directory,
+                    modified,
                 },
                 entry
             );

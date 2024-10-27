@@ -3,4 +3,5 @@
 /coverage
 /.idea
 /dogbox_dav_server.sqlite
+/dogbox_dav_server.sqlite-journal
 /build_rs_cov.profraw

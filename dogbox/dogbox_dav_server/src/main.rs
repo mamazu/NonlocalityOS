@@ -1,6 +1,6 @@
 use astraea::storage::{LoadRoot, SQLiteStorage, UpdateRoot};
 use dav_server::{fakels::FakeLs, DavHandler};
-use dogbox_tree_editor::{OpenDirectory, OpenDirectoryStatus};
+use dogbox_tree_editor::{OpenDirectory, OpenDirectoryStatus, WallClock};
 use hyper::{body, server::conn::http1, Request};
 use hyper_util::rt::TokioIo;
 use std::{
@@ -95,6 +95,8 @@ async fn save_tree_regularly(
 async fn run_dav_server(
     listener: TcpListener,
     database_file_name: &Path,
+    modified_default: std::time::SystemTime,
+    clock: WallClock,
 ) -> Result<
     (
         tokio::sync::watch::Receiver<SaveStatus>,
@@ -129,9 +131,14 @@ async fn run_dav_server(
     let root_name = "latest";
     let root = match blob_storage.load_root(&root_name) {
         Some(found) => {
-            OpenDirectory::load_directory(blob_storage.clone(), &found).await.unwrap(/*TODO*/)
+            OpenDirectory::load_directory(blob_storage.clone(), &found, modified_default, clock).await.unwrap(/*TODO*/)
         }
-        None => Arc::new(OpenDirectory::from_entries(vec![], blob_storage.clone())),
+        None => Arc::new(OpenDirectory::from_entries(
+            vec![],
+            blob_storage.clone(),
+            modified_default,
+            clock,
+        )),
     };
     let dav_server = Arc::new(
         DavHandler::builder()
@@ -158,6 +165,7 @@ async fn run_dav_server(
 mod tests {
     use crate::run_dav_server;
     use astraea::tree::VALUE_BLOB_MAX_LENGTH;
+    use dogbox_tree_editor::WallClock;
     use reqwest_dav::{list_cmd::ListEntity, Auth, Client, ClientBuilder, Depth};
     use std::{future::Future, net::SocketAddr, pin::Pin};
     use tokio::net::TcpListener;
@@ -167,13 +175,17 @@ mod tests {
         database_file_name: &std::path::Path,
         change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
         verify_changes: &impl Fn(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
+        modified_default: std::time::SystemTime,
+        clock: WallClock,
     ) {
         let address = SocketAddr::from(([127, 0, 0, 1], 0));
         let listener = TcpListener::bind(address).await.unwrap();
         let actual_address = listener.local_addr().unwrap();
         let server_url = format!("http://{}", actual_address);
         let (mut save_status_receiver, server) =
-            run_dav_server(listener, &database_file_name).await.unwrap();
+            run_dav_server(listener, &database_file_name, modified_default, clock)
+                .await
+                .unwrap();
         let client_side_testing = async move {
             change_files(create_client(server_url.clone())).await;
             verify_changes(create_client(server_url.clone())).await;
@@ -207,11 +219,24 @@ mod tests {
         change_files: impl FnOnce(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
         verify_changes: &impl Fn(Client) -> Pin<Box<dyn Future<Output = ()> + 't>>,
     ) {
+        let clock = || {
+            std::time::SystemTime::UNIX_EPOCH
+                .checked_add(std::time::Duration::from_secs(13))
+                .unwrap()
+        };
+        let modified_default = clock();
         let temporary_directory = tempfile::tempdir().unwrap();
         let database_file_name = temporary_directory.path().join("dogbox_dav_server.sqlite");
         assert!(!std::fs::exists(&database_file_name).unwrap());
         info!("First test server instance");
-        run_dav_server_instance(&database_file_name, change_files, &verify_changes).await;
+        run_dav_server_instance(
+            &database_file_name,
+            change_files,
+            &verify_changes,
+            modified_default,
+            clock,
+        )
+        .await;
 
         // Start a new instance with the database from the first instance to check if the data was persisted correctly.
         info!("Second test server instance");
@@ -222,6 +247,8 @@ mod tests {
                 Box::pin(async move { /* no changes */ })
             },
             &verify_changes,
+            modified_default,
+            clock,
         )
         .await;
         assert!(std::fs::exists(&database_file_name).unwrap());
@@ -681,8 +708,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap()
         .join("dogbox_dav_server.sqlite");
     let listener = TcpListener::bind(address).await?;
-    println!("Serving on http://{}", address);
-    let (_save_status_receiver, server) = run_dav_server(listener, &database_file_name).await?;
+    info!("Serving on http://{}", address);
+    let clock = std::time::SystemTime::now;
+    let modified_default = clock();
+    info!(
+        "Last modification time defaults to {:#?}",
+        &modified_default
+    );
+    let (_save_status_receiver, server) =
+        run_dav_server(listener, &database_file_name, modified_default, clock).await?;
     server.await?;
     Ok(())
 }

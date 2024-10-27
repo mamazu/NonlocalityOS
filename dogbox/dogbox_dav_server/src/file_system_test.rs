@@ -15,6 +15,10 @@ mod tests {
     };
     use tokio::net::TcpListener;
 
+    fn test_clock() -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+
     #[test_log::test(tokio::test)]
     async fn test_dav_access() {
         let blob_storage = Arc::new(InMemoryValueStorage::new(Mutex::new(BTreeMap::new())));
@@ -23,6 +27,8 @@ mod tests {
                 dogbox_tree_editor::TreeEditor::new(Arc::new(OpenDirectory::from_entries(
                     vec![],
                     blob_storage,
+                    test_clock(),
+                    test_clock,
                 ))),
             )))
             .locksystem(FakeLs::new())

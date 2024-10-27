@@ -1,6 +1,7 @@
 use async_stream::stream;
 use dav_server::fs::FsError;
 use dogbox_tree_editor::DirectoryEntryKind;
+use dogbox_tree_editor::DirectoryEntryMetaData;
 use dogbox_tree_editor::NormalizedPath;
 use dogbox_tree_editor::OpenFile;
 use futures::stream::StreamExt;
@@ -41,7 +42,9 @@ impl DogBoxFileSystem {
 }
 
 #[derive(Debug, Clone)]
-struct DogBoxDirectoryMetaData {}
+struct DogBoxDirectoryMetaData {
+    modified: std::time::SystemTime,
+}
 
 impl dav_server::fs::DavMetaData for DogBoxDirectoryMetaData {
     fn len(&self) -> u64 {
@@ -49,7 +52,7 @@ impl dav_server::fs::DavMetaData for DogBoxDirectoryMetaData {
     }
 
     fn modified(&self) -> dav_server::fs::FsResult<std::time::SystemTime> {
-        Ok(std::time::SystemTime::now())
+        Ok(self.modified)
     }
 
     fn is_dir(&self) -> bool {
@@ -59,23 +62,23 @@ impl dav_server::fs::DavMetaData for DogBoxDirectoryMetaData {
 
 #[derive(Debug, Clone)]
 struct DogBoxMetaData {
-    kind: DirectoryEntryKind,
+    entry: DirectoryEntryMetaData,
 }
 
 impl dav_server::fs::DavMetaData for DogBoxMetaData {
     fn len(&self) -> u64 {
-        match self.kind {
+        match self.entry.kind {
             DirectoryEntryKind::Directory => 0,
             DirectoryEntryKind::File(length) => length,
         }
     }
 
     fn modified(&self) -> dav_server::fs::FsResult<std::time::SystemTime> {
-        Ok(std::time::SystemTime::now())
+        Ok(self.entry.modified)
     }
 
     fn is_dir(&self) -> bool {
-        match self.kind {
+        match self.entry.kind {
             DirectoryEntryKind::Directory => true,
             DirectoryEntryKind::File(_) => false,
         }
@@ -85,6 +88,7 @@ impl dav_server::fs::DavMetaData for DogBoxMetaData {
 #[derive(Debug, Clone)]
 struct DogBoxFileMetaData {
     size: u64,
+    modified: std::time::SystemTime,
 }
 
 impl dav_server::fs::DavMetaData for DogBoxFileMetaData {
@@ -93,7 +97,7 @@ impl dav_server::fs::DavMetaData for DogBoxFileMetaData {
     }
 
     fn modified(&self) -> dav_server::fs::FsResult<std::time::SystemTime> {
-        Ok(std::time::SystemTime::now())
+        Ok(self.modified)
     }
 
     fn is_dir(&self) -> bool {
@@ -112,14 +116,15 @@ impl dav_server::fs::DavDirEntry for DogBoxDirEntry {
 
     fn metadata(&self) -> dav_server::fs::FsFuture<Box<dyn dav_server::fs::DavMetaData>> {
         let result = match self.info.kind {
-            dogbox_tree_editor::DirectoryEntryKind::Directory => {
-                Box::new(DogBoxDirectoryMetaData {})
-                    as Box<(dyn dav_server::fs::DavMetaData + 'static)>
-            }
-            dogbox_tree_editor::DirectoryEntryKind::File(size) => {
-                Box::new(DogBoxFileMetaData { size: size })
-                    as Box<(dyn dav_server::fs::DavMetaData + 'static)>
-            }
+            dogbox_tree_editor::DirectoryEntryKind::Directory => Box::new(DogBoxDirectoryMetaData {
+                modified: self.info.modified,
+            })
+                as Box<(dyn dav_server::fs::DavMetaData + 'static)>,
+            dogbox_tree_editor::DirectoryEntryKind::File(size) => Box::new(DogBoxFileMetaData {
+                size: size,
+                modified: self.info.modified,
+            })
+                as Box<(dyn dav_server::fs::DavMetaData + 'static)>,
         };
         Box::pin(async move { Ok(result) })
     }
@@ -135,7 +140,7 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
     fn metadata(&mut self) -> dav_server::fs::FsFuture<Box<dyn dav_server::fs::DavMetaData>> {
         Box::pin(async move {
             Ok(Box::new(DogBoxMetaData {
-                kind: self.handle.get_meta_data().await,
+                entry: self.handle.get_meta_data().await,
             }) as Box<(dyn dav_server::fs::DavMetaData)>)
         })
     }
@@ -278,7 +283,7 @@ impl dav_server::fs::DavFileSystem for DogBoxFileSystem {
                 .get_meta_data(NormalizedPath::new(converted_path))
                 .await
             {
-                Ok(success) => Ok(Box::new(DogBoxMetaData { kind: success })
+                Ok(success) => Ok(Box::new(DogBoxMetaData { entry: success })
                     as Box<(dyn dav_server::fs::DavMetaData + 'static)>),
                 Err(error) => Err(Self::handle_error(self, error)),
             }
