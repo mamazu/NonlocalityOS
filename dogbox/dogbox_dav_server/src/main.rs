@@ -249,6 +249,12 @@ mod tests {
         }
     }
 
+    async fn expect_directory_empty(client: Client, directory: &str) {
+        let subdir_listed = client.list(directory, Depth::Number(1)).await.unwrap();
+        assert_eq!(1, subdir_listed.len());
+        expect_directory(&subdir_listed[0], directory)
+    }
+
     fn expect_file(entity: &ListEntity, name: &str, size: i64, content_type: &str) {
         match entity {
             reqwest_dav::list_cmd::ListEntity::File(file) => {
@@ -465,6 +471,7 @@ mod tests {
         };
         test_fresh_dav_server(change_files, &verify_changes).await
     }
+
     #[test_log::test(tokio::test)]
     async fn test_rename_file() {
         let content = "test";
@@ -507,6 +514,67 @@ mod tests {
                 assert_eq!(2, listed.len());
                 expect_directory(&listed[0], "/");
                 expect_directory(&listed[1], "/B/");
+            })
+        };
+        test_fresh_dav_server(change_files, &verify_changes).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_rename_with_different_directories() {
+        let content = "test";
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                client.mkcol("A").await.unwrap();
+                client.put("A/foo.txt", content).await.unwrap();
+                client.mv("A/foo.txt", "B.txt").await.unwrap();
+            })
+        };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                let root_listed = client.list("", Depth::Number(1)).await.unwrap();
+                assert_eq!(3, root_listed.len());
+                expect_directory(&root_listed[0], "/");
+                expect_directory(&root_listed[1], "/A/");
+                expect_file(
+                    &root_listed[2],
+                    "/B.txt",
+                    content.len() as i64,
+                    "text/plain",
+                );
+
+                expect_directory_empty(client, "/A/").await;
+            })
+        };
+        test_fresh_dav_server(change_files, &verify_changes).await
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_rename_with_different_directories_locking() {
+        let content = "test";
+        let change_files = |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                client.mkcol("A").await.unwrap();
+                client.put("A/foo.txt", content).await.unwrap();
+                client.mv("A/foo.txt", "B.txt").await.unwrap();
+                client.mv("B.txt", "A/foo.txt").await.unwrap();
+            })
+        };
+        let verify_changes = move |client: Client| -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                let root_listed = client.list("", Depth::Number(1)).await.unwrap();
+                assert_eq!(2, root_listed.len());
+                expect_directory(&root_listed[0], "/");
+                expect_directory(&root_listed[1], "/A/");
+
+                let a_listed = client.list("/A/", Depth::Number(1)).await.unwrap();
+                assert_eq!(2, a_listed.len());
+                expect_directory(&a_listed[0], "/A/");
+                expect_file(
+                    &a_listed[1],
+                    "/A/foo.txt",
+                    content.len() as i64,
+                    "text/plain",
+                );
             })
         };
         test_fresh_dav_server(change_files, &verify_changes).await

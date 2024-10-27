@@ -11,7 +11,7 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::info;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -378,29 +378,59 @@ impl OpenDirectory {
         there: &OpenDirectory,
         name_there: &str,
     ) -> Result<()> {
-        if !std::ptr::eq(self, there) {
-            todo!()
+        let mut names_locked: MutexGuard<'_, BTreeMap<String, NamedEntry>>;
+        let names_there_locked: Option<MutexGuard<'_, BTreeMap<String, NamedEntry>>>;
+
+        let comparison = std::ptr::from_ref(self).cmp(&std::ptr::from_ref(there));
+        match comparison {
+            std::cmp::Ordering::Less => {
+                names_locked = self.names.lock().await;
+                names_there_locked = Some(there.names.lock().await);
+            }
+            std::cmp::Ordering::Equal => {
+                names_locked = self.names.lock().await;
+                names_there_locked = None;
+            }
+            std::cmp::Ordering::Greater => {
+                names_there_locked = Some(there.names.lock().await);
+                names_locked = self.names.lock().await;
+            }
         }
-        let mut names_locked = self.names.lock().await;
+
         match names_locked.get(name_here) {
             Some(_) => {}
             None => return Err(Error::NotFound),
         }
 
         info!(
-            "Renaming from {} to {} within the directory sends a change event to the directory.",
+            "Renaming from {} to {} sending a change event to the directory.",
             name_here, name_there
         );
-        self.change_event_sender.send(()).unwrap();
-        let (_obsolete_name, entry) = names_locked.remove_entry(name_here).unwrap();
 
-        match names_locked.get_mut(name_there) {
-            Some(existing_name) => *existing_name = entry,
-            None => {
-                names_locked.insert(name_there.to_string(), entry);
-            }
+        self.change_event_sender.send(()).unwrap();
+        if names_there_locked.is_some() {
+            there.change_event_sender.send(()).unwrap();
+        }
+
+        let (_obsolete_name, entry) = names_locked.remove_entry(name_here).unwrap();
+        match names_there_locked {
+            Some(value) => Self::write_into_directory(value, name_there, entry),
+            None => Self::write_into_directory(names_locked, name_there, entry),
         }
         Ok(())
+    }
+
+    fn write_into_directory(
+        mut names: MutexGuard<'_, BTreeMap<String, NamedEntry>>,
+        name_there: &str,
+        entry: NamedEntry,
+    ) {
+        match names.get_mut(name_there) {
+            Some(existing_name) => *existing_name = entry,
+            None => {
+                names.insert(name_there.to_string(), entry);
+            }
+        };
     }
 
     pub fn wait_for_next_change<'t>(
