@@ -35,7 +35,7 @@ async fn main() -> std::io::Result<()> {
         .unwrap()
         .add_type(TypeId(3));
     let message_1 = value_storage
-        .store_value(Arc::new(Value::from_string("hello, ")))
+        .store_value(Arc::new(Value::from_string("hello, ").unwrap()))
         .unwrap()
         .add_type(TypeId(0));
     let text_in_console_1 = value_storage
@@ -51,7 +51,7 @@ async fn main() -> std::io::Result<()> {
         .unwrap()
         .add_type(TypeId(4));
     let message_2 = value_storage
-        .store_value(Arc::new(Value::from_string("world!\n")))
+        .store_value(Arc::new(Value::from_string("world!\n").unwrap()))
         .unwrap()
         .add_type(TypeId(0));
     let text_in_console_2 = make_text_in_console(delay, message_2);

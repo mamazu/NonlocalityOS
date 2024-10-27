@@ -2,7 +2,7 @@
 mod tests {
     use crate::{
         storage::{LoadRoot, LoadValue, SQLiteStorage, StoreValue, UpdateRoot},
-        tree::{BlobDigest, Reference, TypeId, TypedReference, Value},
+        tree::{BlobDigest, Reference, TypeId, TypedReference, Value, ValueBlob},
     };
     use std::sync::{Arc, Mutex};
 
@@ -103,7 +103,10 @@ mod tests {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         SQLiteStorage::create_schema(&connection).unwrap();
         let storage = SQLiteStorage::new(Mutex::new(connection));
-        let value = Arc::new(Value::new(b"test 123".to_vec(), vec![]));
+        let value = Arc::new(Value::new(
+            ValueBlob::try_from(b"test 123".to_vec()).unwrap(),
+            vec![],
+        ));
         let reference = storage.store_value(value.clone()).unwrap();
         assert_eq!(
             BlobDigest::new(&[
@@ -125,7 +128,7 @@ mod tests {
         let storage = SQLiteStorage::new(Mutex::new(connection));
         let referenced_digest = BlobDigest::hash(b"ref");
         let value = Arc::new(Value::new(
-            b"test 123".to_vec(),
+            ValueBlob::try_from(b"test 123".to_vec()).unwrap(),
             vec![TypedReference::new(
                 TypeId(0),
                 Reference::new(referenced_digest),
@@ -152,7 +155,10 @@ mod tests {
         let storage = SQLiteStorage::new(Mutex::new(connection));
         let reference_1 = storage.store_value(Arc::new(Value::from_unit())).unwrap();
         let reference_2 = storage
-            .store_value(Arc::new(Value::new(b"test 123".to_vec(), vec![])))
+            .store_value(Arc::new(Value::new(
+                ValueBlob::try_from(b"test 123".to_vec()).unwrap(),
+                vec![],
+            )))
             .unwrap();
         let name = "test";
         assert_eq!(None, storage.load_root(name));

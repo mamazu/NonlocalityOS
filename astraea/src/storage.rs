@@ -1,4 +1,6 @@
-use crate::tree::{calculate_reference, BlobDigest, Reference, TypeId, TypedReference, Value};
+use crate::tree::{
+    calculate_reference, BlobDigest, Reference, TypeId, TypedReference, Value, ValueBlob,
+};
 use rusqlite::Transaction;
 use std::{
     collections::BTreeMap,
@@ -152,7 +154,7 @@ impl StoreValue for SQLiteStorage {
         }
         connection_locked.execute(
             "INSERT INTO value (digest, value_blob) VALUES (?1, ?2)",
-            (&origin_digest, &value.blob),
+            (&origin_digest, value.blob.as_slice()),
         ).unwrap(/*TODO*/);
         let inserted_value_rowid = connection_locked.last_insert_rowid();
         for (index, reference) in value.references.iter().enumerate() {
@@ -175,7 +177,7 @@ impl LoadValue for SQLiteStorage {
         (&digest, )       ,
          |row| -> rusqlite::Result<_> {
             let id : i64 = row.get(0).unwrap(/*TODO*/);
-            let value_blob = row.get(1).unwrap(/*TODO*/);
+            let value_blob = ValueBlob::try_from(row.get(1).unwrap(/*TODO*/)).unwrap(/*TODO*/);
             Ok((id, value_blob))
          } ).unwrap(/*TODO*/);
         let mut statement = connection_locked.prepare("SELECT zero_based_index, target FROM reference WHERE origin = ? ORDER BY zero_based_index ASC").unwrap(/*TODO*/);

@@ -582,7 +582,7 @@ fn parse_expression(
         Some(non_whitespace) => match &non_whitespace.content {
             TokenContent::Whitespace => todo!(),
             TokenContent::Identifier(identifier) => storage
-                .store_value(Arc::new(Value::from_string(&identifier)))
+                .store_value(Arc::new(Value::from_string(&identifier).unwrap(/*TODO*/)))
                 .unwrap()
                 .add_type(TypeId(0)),
             TokenContent::Assign => todo!(),
@@ -609,7 +609,9 @@ fn parse_lambda(tokens: &mut std::slice::Iter<Token>, storage: &dyn StoreValue) 
         None => todo!(),
     };
     let parameter = storage
-        .store_value(Arc::new(Value::from_string(parameter_name)))
+        .store_value(Arc::new(
+            Value::from_string(parameter_name).unwrap(/*TODO*/),
+        ))
         .unwrap()
         .add_type(TypeId(0));
     expect_dot(tokens);
@@ -701,7 +703,7 @@ mod tests2 {
             InMemoryValueStorage::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
         let output = compile(r#"^x . x"#, &value_storage);
         let parameter = value_storage
-            .store_value(Arc::new(Value::from_string("x")))
+            .store_value(Arc::new(Value::from_string("x").unwrap()))
             .unwrap()
             .add_type(TypeId(0));
         let entry_point = value_storage

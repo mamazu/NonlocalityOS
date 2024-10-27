@@ -157,6 +157,7 @@ async fn run_dav_server(
 #[cfg(test)]
 mod tests {
     use crate::run_dav_server;
+    use astraea::tree::VALUE_BLOB_MAX_LENGTH;
     use reqwest_dav::{list_cmd::ListEntity, Auth, Client, ClientBuilder, Depth};
     use std::{future::Future, net::SocketAddr, pin::Pin};
     use tokio::net::TcpListener;
@@ -344,7 +345,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_create_file_with_large_content() {
-        test_create_file(random_bytes(64_000)).await
+        test_create_file(random_bytes(VALUE_BLOB_MAX_LENGTH)).await
     }
 
     #[test_log::test(tokio::test)]

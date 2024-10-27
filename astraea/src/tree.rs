@@ -95,36 +95,60 @@ impl TypedReference {
     }
 }
 
+pub const VALUE_BLOB_MAX_LENGTH: usize = 64_000;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct ValueBlob {
+    content: Vec<u8>,
+}
+
+impl ValueBlob {
+    pub fn empty() -> ValueBlob {
+        Self { content: vec![] }
+    }
+
+    pub fn try_from(content: Vec<u8>) -> Option<ValueBlob> {
+        if content.len() > VALUE_BLOB_MAX_LENGTH {
+            return None;
+        }
+        Some(Self { content: content })
+    }
+
+    pub fn as_slice<'t>(&'t self) -> &'t [u8] {
+        self.content.as_slice()
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Value {
-    pub blob: Vec<u8>,
+    pub blob: ValueBlob,
     pub references: Vec<TypedReference>,
 }
 
 impl Value {
-    pub fn new(blob: Vec<u8>, references: Vec<TypedReference>) -> Value {
+    pub fn new(blob: ValueBlob, references: Vec<TypedReference>) -> Value {
         Value {
             blob,
             references: references,
         }
     }
 
-    pub fn from_string(value: &str) -> Value {
-        Value {
-            blob: value.as_bytes().to_vec(),
+    pub fn from_string(value: &str) -> Option<Value> {
+        ValueBlob::try_from(value.as_bytes().to_vec()).map(|blob| Value {
+            blob,
             references: Vec::new(),
-        }
+        })
     }
 
     pub fn from_unit() -> Value {
         Value {
-            blob: Vec::new(),
+            blob: ValueBlob::empty(),
             references: Vec::new(),
         }
     }
 
     pub fn to_string(&self) -> Option<String> {
-        match std::str::from_utf8(&self.blob) {
+        match std::str::from_utf8(self.blob.as_slice()) {
             Ok(success) => Some(success.to_string()),
             Err(_) => None,
         }
@@ -291,7 +315,7 @@ impl ReduceExpression for Identity {
 
 pub fn calculate_reference(referenced: &Value) -> Reference {
     let mut hasher = Sha3_512::new();
-    hasher.update(&referenced.blob);
+    hasher.update(referenced.blob.as_slice());
     for item in &referenced.references {
         hasher.update(item.type_id.0.to_be_bytes());
         hasher.update(item.reference.digest.0 .0);
@@ -312,7 +336,7 @@ async fn test_reduce_expression() {
     let value_storage =
         crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let result = reduce_expression_without_storing_the_final_result(
-        TypedValue::new(TypeId(0), Value::from_string("hello, world!\n")),
+        TypedValue::new(TypeId(0), Value::from_string("hello, world!\n").unwrap()),
         &services,
         &value_storage,
         &value_storage,
@@ -330,7 +354,7 @@ pub fn make_text_in_console(past: TypedReference, text: TypedReference) -> Typed
     TypedValue::new(
         TypeId(2),
         Value {
-            blob: Vec::new(),
+            blob: ValueBlob::empty(),
             references: vec![past, text],
         },
     )
@@ -338,7 +362,7 @@ pub fn make_text_in_console(past: TypedReference, text: TypedReference) -> Typed
 
 pub fn make_beginning_of_time() -> Value {
     Value {
-        blob: Vec::new(),
+        blob: ValueBlob::empty(),
         references: vec![],
     }
 }
@@ -347,7 +371,7 @@ pub fn make_effect(cause: TypedReference) -> TypedValue {
     TypedValue::new(
         TypeId(3),
         Value {
-            blob: Vec::new(),
+            blob: ValueBlob::empty(),
             references: vec![cause],
         },
     )
@@ -374,7 +398,7 @@ async fn test_effect() {
         .unwrap()
         .add_type(TypeId(3));
     let message = value_storage
-        .store_value(Arc::new(Value::from_string("hello, world!\n")))
+        .store_value(Arc::new(Value::from_string("hello, world!\n").unwrap()))
         .unwrap()
         .add_type(TypeId(0));
     let text_in_console = make_text_in_console(past, message);
@@ -394,7 +418,7 @@ pub fn make_seconds(amount: u64) -> TypedValue {
     TypedValue::new(
         TypeId(5),
         Value {
-            blob: amount.to_be_bytes().to_vec(),
+            blob: ValueBlob::try_from(amount.to_be_bytes().to_vec()).unwrap(),
             references: Vec::new(),
         },
     )
@@ -402,10 +426,10 @@ pub fn make_seconds(amount: u64) -> TypedValue {
 
 pub fn to_seconds(value: &Value) -> Option<u64> {
     let mut buf: [u8; 8] = [0; 8];
-    if buf.len() != value.blob.len() {
+    if buf.len() != value.blob.as_slice().len() {
         return None;
     }
-    buf.copy_from_slice(&value.blob);
+    buf.copy_from_slice(value.blob.as_slice());
     Some(u64::from_be_bytes(buf))
 }
 
@@ -413,7 +437,7 @@ pub fn make_sum(summands: Vec<TypedReference>) -> TypedValue {
     TypedValue::new(
         TypeId(6),
         Value {
-            blob: Vec::new(),
+            blob: ValueBlob::empty(),
             references: summands,
         },
     )
@@ -515,7 +539,7 @@ pub fn make_delay(before: TypedReference, duration: TypedReference) -> TypedValu
     TypedValue::new(
         TypeId(4),
         Value {
-            blob: Vec::new(),
+            blob: ValueBlob::empty(),
             references: vec![before, duration],
         },
     )
@@ -581,7 +605,7 @@ async fn test_delay() {
         .unwrap()
         .add_type(TypeId(4));
     let message = value_storage
-        .store_value(Arc::new(Value::from_string("hello, world!\n")))
+        .store_value(Arc::new(Value::from_string("hello, world!\n").unwrap()))
         .unwrap()
         .add_type(TypeId(0));
     let text_in_console = make_text_in_console(delay, message);
@@ -657,7 +681,7 @@ pub fn make_lambda(lambda: Lambda) -> TypedValue {
     TypedValue::new(
         TypeId(7),
         Value {
-            blob: Vec::new(),
+            blob: ValueBlob::empty(),
             references: vec![lambda.variable, lambda.body],
         },
     )
@@ -688,7 +712,7 @@ pub fn make_lambda_application(function: TypedReference, argument: TypedReferenc
     TypedValue::new(
         TypeId(8),
         Value {
-            blob: Vec::new(),
+            blob: ValueBlob::empty(),
             references: vec![function, argument],
         },
     )
@@ -797,7 +821,7 @@ async fn test_lambda() {
     let value_storage =
         crate::storage::InMemoryValueStorage::new(std::sync::Mutex::new(BTreeMap::new()));
     let arg = value_storage
-        .store_value(Arc::new(Value::from_string("arg")))
+        .store_value(Arc::new(Value::from_string("arg").unwrap()))
         .unwrap()
         .add_type(TypeId(0));
     let one = value_storage
@@ -880,16 +904,16 @@ impl CompilerOutput {
         if input.references.len() != 1 {
             return None;
         }
-        let errors: Vec<CompilerError> = match postcard::from_bytes(&input.blob[..]) {
+        let errors: Vec<CompilerError> = match postcard::from_bytes(input.blob.as_slice()) {
             Ok(parsed) => parsed,
             Err(_) => return None,
         };
         Some(CompilerOutput::new(input.references[0], errors))
     }
 
-    pub fn to_value(self) -> Value {
-        let value_blob = postcard::to_allocvec(&self.errors).unwrap();
-        Value::new(value_blob, vec![self.entry_point])
+    pub fn to_value(self) -> Option<Value> {
+        ValueBlob::try_from(postcard::to_allocvec(&self.errors).unwrap())
+            .map(|value_blob| Value::new(value_blob, vec![self.entry_point]))
     }
 }
 
@@ -909,7 +933,7 @@ impl ReduceExpression for CompiledReducer {
         let compiler_output: CompilerOutput = crate::compiler::compile(&source_string, storage);
         Box::pin(std::future::ready(TypedValue::new(
             TypeId(10),
-            compiler_output.to_value(),
+            compiler_output.to_value().unwrap(/*TODO*/),
         )))
     }
 }

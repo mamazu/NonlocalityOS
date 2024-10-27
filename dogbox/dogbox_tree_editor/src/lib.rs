@@ -1,6 +1,6 @@
 use astraea::{
     storage::{LoadStoreValue, StoreError},
-    tree::{BlobDigest, Reference, ReferenceIndex, TypeId, TypedReference, Value},
+    tree::{BlobDigest, Reference, ReferenceIndex, TypeId, TypedReference, Value, ValueBlob},
 };
 use async_stream::stream;
 use bytes::Buf;
@@ -233,17 +233,20 @@ impl OpenDirectory {
                     DirectoryEntryKind::File(length) => {
                         let content = if *length > 0 {
                             let file_value = self.storage.load_value(&Reference::new(digest.clone())).unwrap(/*TODO*/);
-                            if *length != file_value.blob.len() as u64 {
+                            if *length != file_value.blob.as_slice().len() as u64 {
                                 return Err(Error::FileSizeMismatch);
                             }
                             // TODO: avoid clone
                             file_value.blob.clone()
                         } else {
                             // No need to load the content of a file we already know is empty.
-                            vec![]
+                            ValueBlob::empty()
                         };
-                        let open_file =
-                            Arc::new(OpenFile::new(content, false, self.storage.clone()));
+                        let open_file = Arc::new(OpenFile::new(
+                            /*TODO: avoid cloning here*/ content.as_slice().to_vec(),
+                            false,
+                            self.storage.clone(),
+                        ));
                         *found = NamedEntry::OpenRegularFile(open_file.clone());
                         info!(
                             "Opening file {} sends a change event for its parent directory.",
@@ -275,10 +278,11 @@ impl OpenDirectory {
     ) -> Result<Arc<OpenDirectory>> {
         match storage.load_value(&Reference::new(*digest)) {
             Some(loaded) => {
-                let parsed_directory: DirectoryTree = match postcard::from_bytes(&loaded.blob) {
-                    Ok(success) => success,
-                    Err(error) => return Err(Error::Postcard(error)),
-                };
+                let parsed_directory: DirectoryTree =
+                    match postcard::from_bytes(loaded.blob.as_slice()) {
+                        Ok(success) => success,
+                        Err(error) => return Err(Error::Postcard(error)),
+                    };
                 let mut entries = vec![];
                 info!(
                     "Loading directory with {} entries",
@@ -555,21 +559,25 @@ impl OpenDirectory {
                     Some(error) => Err(error),
                     None => {
                         info!("Storing directory with {} entries", children.len());
-                        self.storage
-                            .store_value(Arc::new(Value::new(
-                                postcard::to_allocvec(&DirectoryTree { children }).unwrap(),
-                                references,
-                            )))
-                            .map(|reference| {
-                                OpenDirectoryStatus::new(
-                                    reference.digest,
-                                    directories_open_count,
-                                    files_open_count,
-                                    files_open_for_writing_count,
-                                    files_unflushed_count,
-                                    bytes_unflushed_count,
-                                )
-                            })
+                        let maybe_value_blob = ValueBlob::try_from(
+                            postcard::to_allocvec(&DirectoryTree { children }).unwrap(),
+                        );
+                        match maybe_value_blob {
+                            Some(value_blob) => self
+                                .storage
+                                .store_value(Arc::new(Value::new(value_blob, references)))
+                                .map(|reference| {
+                                    OpenDirectoryStatus::new(
+                                        reference.digest,
+                                        directories_open_count,
+                                        files_open_count,
+                                        files_open_for_writing_count,
+                                        files_unflushed_count,
+                                        bytes_unflushed_count,
+                                    )
+                                }),
+                            None => todo!(),
+                        }
                     }
                 };
             (status_result, change_event_future_result)
@@ -748,9 +756,10 @@ impl OpenFile {
     ) {
         let mut content_locked = self.content.lock().await;
         let size = content_locked.data.len();
-        let maybe_content_reference = self
-            .storage
-            .store_value(Arc::new(Value::new(content_locked.data.clone(), vec![])));
+        let maybe_content_reference = self.storage.store_value(Arc::new(Value::new(
+            ValueBlob::try_from( content_locked.data.clone()).unwrap(/*TODO*/),
+            vec![],
+        )));
         content_locked.has_uncommitted_changes = false;
         let mut receiver = self.change_event_sender.subscribe();
         let change_event_future = async move { receiver.changed().await.unwrap() };
