@@ -231,20 +231,8 @@ impl OpenDirectory {
                 NamedEntry::NotOpen(kind, digest) => match kind {
                     DirectoryEntryKind::Directory => todo!(),
                     DirectoryEntryKind::File(length) => {
-                        let content = if *length > 0 {
-                            let file_value = self.storage.load_value(&Reference::new(digest.clone())).unwrap(/*TODO*/);
-                            if *length != file_value.blob.as_slice().len() as u64 {
-                                return Err(Error::FileSizeMismatch);
-                            }
-                            // TODO: avoid clone
-                            file_value.blob.clone()
-                        } else {
-                            // No need to load the content of a file we already know is empty.
-                            ValueBlob::empty()
-                        };
                         let open_file = Arc::new(OpenFile::new(
-                            /*TODO: avoid cloning here*/ content.as_slice().to_vec(),
-                            false,
+                            OpenFileContentBuffer::new(Some(digest.clone()), *length, None, false),
                             self.storage.clone(),
                         ));
                         *found = NamedEntry::OpenRegularFile(open_file.clone());
@@ -260,7 +248,10 @@ impl OpenDirectory {
                 NamedEntry::OpenSubdirectory(_) => Err(Error::CannotOpenDirectoryAsRegularFile),
             },
             None => {
-                let open_file = Arc::new(OpenFile::new(vec![], true, self.storage.clone()));
+                let open_file = Arc::new(OpenFile::new(
+                    OpenFileContentBuffer::new(None, 0, Some(vec![]), true),
+                    self.storage.clone(),
+                ));
                 info!("Adding file {} to the directory which sends a change event for its parent directory.", &name);
                 names_locked.insert(
                     name.to_string(),
@@ -679,9 +670,112 @@ pub struct OpenFileStatus {
 }
 
 #[derive(Debug)]
-struct OpenFileContentBuffer {
-    data: Vec<u8>,
+pub struct OpenFileContentBuffer {
+    digest: Option<BlobDigest>,
+    size: u64,
+    data: Option<Vec<u8>>,
     has_uncommitted_changes: bool,
+}
+
+impl OpenFileContentBuffer {
+    pub fn new(
+        digest: Option<BlobDigest>,
+        size: u64,
+        data: Option<Vec<u8>>,
+        has_uncommitted_changes: bool,
+    ) -> Self {
+        Self {
+            digest,
+            size,
+            data,
+            has_uncommitted_changes,
+        }
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub async fn read(
+        &mut self,
+        position: u64,
+        count: usize,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> Result<bytes::Bytes> {
+        match self.data {
+            Some(_) => { // nothing to do
+            }
+            None => {
+                self.data = Some(if self.size > 0 {
+                    let file_value = storage.load_value(&Reference::new(self.digest.unwrap(/*TODO*/))).unwrap(/*TODO*/);
+                    if self.size != file_value.blob.as_slice().len() as u64 {
+                        return Err(Error::FileSizeMismatch);
+                    }
+                    // TODO: avoid clone
+                    file_value.blob.as_slice().to_vec()
+                } else {
+                    // No need to load the content of a file we already know is empty.
+                    vec![]
+                });
+            }
+        }
+
+        let data = self.data.as_ref().unwrap();
+        match data.split_at_checked(position.try_into().unwrap()) {
+            Some((_, from_position)) => Ok(bytes::Bytes::copy_from_slice(
+                match from_position.split_at_checked(count) {
+                    Some((result, _)) => result,
+                    None => from_position,
+                },
+            )),
+            None => todo!(),
+        }
+    }
+
+    pub async fn write(&mut self, position: u64, buf: bytes::Bytes) {
+        let position_usize = position.try_into().unwrap();
+        match &mut self.data {
+            Some(data) => {
+                let previous_content_length = data.len();
+                match data.split_at_mut_checked(position_usize) {
+                    Some((_, overwriting)) => {
+                        let can_overwrite = usize::min(overwriting.len(), buf.len());
+                        let (mut for_overwriting, for_extending) = buf.split_at(can_overwrite);
+                        for_overwriting.copy_to_slice(overwriting.split_at_mut(can_overwrite).0);
+                        data.extend(for_extending);
+                    }
+                    None => {
+                        data.extend(
+                            std::iter::repeat(0u8).take(position_usize - previous_content_length),
+                        );
+                        data.extend(buf);
+                    }
+                };
+                self.size = data.len() as u64;
+                self.has_uncommitted_changes = true;
+            }
+            None => todo!(),
+        }
+    }
+
+    pub async fn store(
+        &mut self,
+        storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
+    ) -> std::result::Result<(Reference, u64), StoreError> {
+        let result = match &self.data {
+            Some(data) => {
+                let maybe_content_reference = storage.store_value(Arc::new(Value::new(
+                    ValueBlob::try_from( data.clone()).unwrap(/*TODO*/),
+                    vec![],
+                )));
+                maybe_content_reference
+                    .map(|content_reference| (content_reference, data.len() as u64))
+            }
+            None => Ok((Reference::new(self.digest.unwrap()), self.size)),
+        };
+        self.has_uncommitted_changes = false;
+        result
+    }
 }
 
 #[derive(Debug)]
@@ -694,16 +788,12 @@ pub struct OpenFile {
 
 impl OpenFile {
     pub fn new(
-        content: Vec<u8>,
-        has_uncommitted_changes: bool,
+        content: OpenFileContentBuffer,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     ) -> OpenFile {
         let (sender, receiver) = tokio::sync::watch::channel(());
         OpenFile {
-            content: tokio::sync::Mutex::new(OpenFileContentBuffer {
-                data: content,
-                has_uncommitted_changes: has_uncommitted_changes,
-            }),
+            content: tokio::sync::Mutex::new(content),
             storage: storage,
             change_event_sender: sender,
             _change_event_receiver: receiver,
@@ -711,30 +801,14 @@ impl OpenFile {
     }
 
     pub async fn get_meta_data(&self) -> DirectoryEntryKind {
-        DirectoryEntryKind::File(self.content.lock().await.data.len() as u64)
+        DirectoryEntryKind::File(self.content.lock().await.size())
     }
 
     pub fn write_bytes(&self, position: u64, buf: bytes::Bytes) -> Future<()> {
+        info!("Write at {}: {} bytes", position, buf.len());
         Box::pin(async move {
-            let position_usize = position.try_into().unwrap();
             let mut content_locked = self.content.lock().await;
-            let data = &mut content_locked.data;
-            let previous_content_length = data.len();
-            match data.split_at_mut_checked(position_usize) {
-                Some((_, overwriting)) => {
-                    let can_overwrite = usize::min(overwriting.len(), buf.len());
-                    let (mut for_overwriting, for_extending) = buf.split_at(can_overwrite);
-                    for_overwriting.copy_to_slice(overwriting.split_at_mut(can_overwrite).0);
-                    data.extend(for_extending);
-                }
-                None => {
-                    data.extend(
-                        std::iter::repeat(0u8).take(position_usize - previous_content_length),
-                    );
-                    data.extend(buf);
-                }
-            };
-            content_locked.has_uncommitted_changes = true;
+            content_locked.write(position, buf).await;
             info!("Writing to file sends a change event for this file.");
             self.change_event_sender.send(()).unwrap();
             Ok(())
@@ -742,18 +816,12 @@ impl OpenFile {
     }
 
     pub fn read_bytes(&self, position: u64, count: usize) -> Future<bytes::Bytes> {
+        info!("Read at {}: Up to {} bytes", position, count);
         Box::pin(async move {
-            let content_locked = self.content.lock().await;
-            let data = &content_locked.data;
-            match data.split_at_checked(position.try_into().unwrap()) {
-                Some((_, from_position)) => Ok(bytes::Bytes::copy_from_slice(match from_position
-                    .split_at_checked(count)
-                {
-                    Some((result, _)) => result,
-                    None => from_position,
-                })),
-                None => todo!(),
-            }
+            let mut content_locked = self.content.lock().await;
+            content_locked
+                .read(position, count, self.storage.clone())
+                .await
         })
     }
 
@@ -770,16 +838,11 @@ impl OpenFile {
         Pin<Box<(dyn std::future::Future<Output = ()> + Send)>>,
     ) {
         let mut content_locked = self.content.lock().await;
-        let size = content_locked.data.len();
-        let maybe_content_reference = self.storage.store_value(Arc::new(Value::new(
-            ValueBlob::try_from( content_locked.data.clone()).unwrap(/*TODO*/),
-            vec![],
-        )));
-        content_locked.has_uncommitted_changes = false;
+        let maybe_content_reference = content_locked.store(self.storage.clone()).await;
         let mut receiver = self.change_event_sender.subscribe();
         let change_event_future = async move { receiver.changed().await.unwrap() };
         (
-            maybe_content_reference.map(|content_reference| OpenFileStatus {
+            maybe_content_reference.map(|(content_reference, size)| OpenFileStatus {
                 digest: content_reference.digest,
                 size: size as u64,
                 // TODO
