@@ -1,5 +1,6 @@
 use crate::tree::{
     calculate_reference, BlobDigest, Reference, TypeId, TypedReference, Value, ValueBlob,
+    VALUE_BLOB_MAX_LENGTH,
 };
 use rusqlite::Transaction;
 use std::{
@@ -89,17 +90,23 @@ impl SQLiteStorage {
 
     pub fn create_schema(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
         connection.pragma_update(None, "foreign_keys", "on")?;
-        connection
-            .execute(
+        {
+            // Why are we using format! instead of an SQL parameter here?
+            // Answer is the SQLite error: "parameters prohibited in CHECK constraints" (because why should anything ever work)
+            let query = format!(
                 "CREATE TABLE value (
                 id INTEGER PRIMARY KEY NOT NULL,
                 digest BLOB UNIQUE NOT NULL,
                 value_blob BLOB NOT NULL,
-                CONSTRAINT digest_length_matches_sha3_512 CHECK (LENGTH(digest) == 64)
+                CONSTRAINT digest_length_matches_sha3_512 CHECK (LENGTH(digest) == 64),
+                CONSTRAINT value_blob_max_length CHECK (LENGTH(value_blob) <= {})
             ) STRICT",
-                (),
-            )
-            .map(|size| assert_eq!(0, size))?;
+                VALUE_BLOB_MAX_LENGTH
+            );
+            connection
+                .execute(&query, ())
+                .map(|size| assert_eq!(0, size))?;
+        }
         connection
             .execute(
                 "CREATE TABLE reference (
