@@ -97,34 +97,34 @@ impl TypedReference {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Value {
-    pub serialized: Vec<u8>,
+    pub blob: Vec<u8>,
     pub references: Vec<TypedReference>,
 }
 
 impl Value {
-    pub fn new(serialized: Vec<u8>, references: Vec<TypedReference>) -> Value {
+    pub fn new(blob: Vec<u8>, references: Vec<TypedReference>) -> Value {
         Value {
-            serialized: serialized,
+            blob,
             references: references,
         }
     }
 
     pub fn from_string(value: &str) -> Value {
         Value {
-            serialized: value.as_bytes().to_vec(),
+            blob: value.as_bytes().to_vec(),
             references: Vec::new(),
         }
     }
 
     pub fn from_unit() -> Value {
         Value {
-            serialized: Vec::new(),
+            blob: Vec::new(),
             references: Vec::new(),
         }
     }
 
     pub fn to_string(&self) -> Option<String> {
-        match std::str::from_utf8(&self.serialized) {
+        match std::str::from_utf8(&self.blob) {
             Ok(success) => Some(success.to_string()),
             Err(_) => None,
         }
@@ -291,7 +291,7 @@ impl ReduceExpression for Identity {
 
 pub fn calculate_reference(referenced: &Value) -> Reference {
     let mut hasher = Sha3_512::new();
-    hasher.update(&referenced.serialized);
+    hasher.update(&referenced.blob);
     for item in &referenced.references {
         hasher.update(item.type_id.0.to_be_bytes());
         hasher.update(item.reference.digest.0 .0);
@@ -330,7 +330,7 @@ pub fn make_text_in_console(past: TypedReference, text: TypedReference) -> Typed
     TypedValue::new(
         TypeId(2),
         Value {
-            serialized: Vec::new(),
+            blob: Vec::new(),
             references: vec![past, text],
         },
     )
@@ -338,7 +338,7 @@ pub fn make_text_in_console(past: TypedReference, text: TypedReference) -> Typed
 
 pub fn make_beginning_of_time() -> Value {
     Value {
-        serialized: Vec::new(),
+        blob: Vec::new(),
         references: vec![],
     }
 }
@@ -347,7 +347,7 @@ pub fn make_effect(cause: TypedReference) -> TypedValue {
     TypedValue::new(
         TypeId(3),
         Value {
-            serialized: Vec::new(),
+            blob: Vec::new(),
             references: vec![cause],
         },
     )
@@ -394,7 +394,7 @@ pub fn make_seconds(amount: u64) -> TypedValue {
     TypedValue::new(
         TypeId(5),
         Value {
-            serialized: amount.to_be_bytes().to_vec(),
+            blob: amount.to_be_bytes().to_vec(),
             references: Vec::new(),
         },
     )
@@ -402,10 +402,10 @@ pub fn make_seconds(amount: u64) -> TypedValue {
 
 pub fn to_seconds(value: &Value) -> Option<u64> {
     let mut buf: [u8; 8] = [0; 8];
-    if buf.len() != value.serialized.len() {
+    if buf.len() != value.blob.len() {
         return None;
     }
-    buf.copy_from_slice(&value.serialized);
+    buf.copy_from_slice(&value.blob);
     Some(u64::from_be_bytes(buf))
 }
 
@@ -413,7 +413,7 @@ pub fn make_sum(summands: Vec<TypedReference>) -> TypedValue {
     TypedValue::new(
         TypeId(6),
         Value {
-            serialized: Vec::new(),
+            blob: Vec::new(),
             references: summands,
         },
     )
@@ -515,7 +515,7 @@ pub fn make_delay(before: TypedReference, duration: TypedReference) -> TypedValu
     TypedValue::new(
         TypeId(4),
         Value {
-            serialized: Vec::new(),
+            blob: Vec::new(),
             references: vec![before, duration],
         },
     )
@@ -657,7 +657,7 @@ pub fn make_lambda(lambda: Lambda) -> TypedValue {
     TypedValue::new(
         TypeId(7),
         Value {
-            serialized: Vec::new(),
+            blob: Vec::new(),
             references: vec![lambda.variable, lambda.body],
         },
     )
@@ -688,7 +688,7 @@ pub fn make_lambda_application(function: TypedReference, argument: TypedReferenc
     TypedValue::new(
         TypeId(8),
         Value {
-            serialized: Vec::new(),
+            blob: Vec::new(),
             references: vec![function, argument],
         },
     )
@@ -738,7 +738,7 @@ fn replace_variable_recursively(
     }
     Some(TypedValue::new(
         body.type_id,
-        Value::new(body_loaded.serialized.clone(), references),
+        Value::new(body_loaded.blob.clone(), references),
     ))
 }
 
@@ -880,7 +880,7 @@ impl CompilerOutput {
         if input.references.len() != 1 {
             return None;
         }
-        let errors: Vec<CompilerError> = match postcard::from_bytes(&input.serialized[..]) {
+        let errors: Vec<CompilerError> = match postcard::from_bytes(&input.blob[..]) {
             Ok(parsed) => parsed,
             Err(_) => return None,
         };
@@ -888,8 +888,8 @@ impl CompilerOutput {
     }
 
     pub fn to_value(self) -> Value {
-        let serialized = postcard::to_allocvec(&self.errors).unwrap();
-        Value::new(serialized, vec![self.entry_point])
+        let value_blob = postcard::to_allocvec(&self.errors).unwrap();
+        Value::new(value_blob, vec![self.entry_point])
     }
 }
 

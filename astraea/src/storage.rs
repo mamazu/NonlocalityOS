@@ -92,7 +92,7 @@ impl SQLiteStorage {
                 "CREATE TABLE value (
                 id INTEGER PRIMARY KEY NOT NULL,
                 digest BLOB UNIQUE NOT NULL,
-                serialized BLOB NOT NULL,
+                value_blob BLOB NOT NULL,
                 CONSTRAINT digest_length_matches_sha3_512 CHECK (LENGTH(digest) == 64)
             ) STRICT",
                 (),
@@ -151,8 +151,8 @@ impl StoreValue for SQLiteStorage {
             _ => panic!(),
         }
         connection_locked.execute(
-            "INSERT INTO value (digest, serialized) VALUES (?1, ?2)",
-            (&origin_digest, &value.serialized),
+            "INSERT INTO value (digest, value_blob) VALUES (?1, ?2)",
+            (&origin_digest, &value.blob),
         ).unwrap(/*TODO*/);
         let inserted_value_rowid = connection_locked.last_insert_rowid();
         for (index, reference) in value.references.iter().enumerate() {
@@ -171,12 +171,12 @@ impl LoadValue for SQLiteStorage {
     fn load_value(&self, reference: &Reference) -> Option<Arc<Value>> {
         let connection_locked = self.connection.lock().unwrap();
         let digest: [u8; 64] = reference.digest.into();
-        let (id, serialized) = connection_locked.query_row_and_then("SELECT id, serialized FROM value WHERE digest = ?1", 
+        let (id, value_blob) = connection_locked.query_row_and_then("SELECT id, value_blob FROM value WHERE digest = ?1", 
         (&digest, )       ,
          |row| -> rusqlite::Result<_> {
             let id : i64 = row.get(0).unwrap(/*TODO*/);
-            let serialized = row.get(1).unwrap(/*TODO*/);
-            Ok((id, serialized))
+            let value_blob = row.get(1).unwrap(/*TODO*/);
+            Ok((id, value_blob))
          } ).unwrap(/*TODO*/);
         let mut statement = connection_locked.prepare("SELECT zero_based_index, target FROM reference WHERE origin = ? ORDER BY zero_based_index ASC").unwrap(/*TODO*/);
         let results = statement.query_map([&id], |row| {
@@ -195,7 +195,7 @@ impl LoadValue for SQLiteStorage {
                 reference
             })
             .collect();
-        Some(Arc::new(Value::new(serialized, references)))
+        Some(Arc::new(Value::new(value_blob, references)))
     }
 }
 

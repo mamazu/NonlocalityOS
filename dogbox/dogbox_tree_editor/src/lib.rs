@@ -233,11 +233,11 @@ impl OpenDirectory {
                     DirectoryEntryKind::File(length) => {
                         let content = if *length > 0 {
                             let file_value = self.storage.load_value(&Reference::new(digest.clone())).unwrap(/*TODO*/);
-                            if *length != file_value.serialized.len() as u64 {
+                            if *length != file_value.blob.len() as u64 {
                                 return Err(Error::FileSizeMismatch);
                             }
                             // TODO: avoid clone
-                            file_value.serialized.clone()
+                            file_value.blob.clone()
                         } else {
                             // No need to load the content of a file we already know is empty.
                             vec![]
@@ -275,8 +275,7 @@ impl OpenDirectory {
     ) -> Result<Arc<OpenDirectory>> {
         match storage.load_value(&Reference::new(*digest)) {
             Some(loaded) => {
-                let parsed_directory: DirectoryTree = match postcard::from_bytes(&loaded.serialized)
-                {
+                let parsed_directory: DirectoryTree = match postcard::from_bytes(&loaded.blob) {
                     Ok(success) => success,
                     Err(error) => return Err(Error::Postcard(error)),
                 };

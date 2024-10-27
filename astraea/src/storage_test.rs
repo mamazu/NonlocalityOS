@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_serialized() {
+    fn test_store_blob() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         SQLiteStorage::create_schema(&connection).unwrap();
         let storage = SQLiteStorage::new(Mutex::new(connection));

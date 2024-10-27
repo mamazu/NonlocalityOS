@@ -75,7 +75,7 @@ mod tests {
             match tree_locked.as_ref() {
                 Some(exists) => Ok(exists.clone()),
                 None => match self.read_blob.load_value(&Reference::new(self.digest)) {
-                    Some(blob_content) => match parse_directory_blob(&blob_content.serialized) {
+                    Some(blob_content) => match parse_directory_blob(&blob_content.blob) {
                         Some(parsed) => {
                             let result = Arc::new(parsed);
                             *tree_locked = Some(result.clone());
