@@ -193,9 +193,20 @@ impl OpenDirectoryStatus {
 }
 
 #[derive(Debug)]
-pub struct OpenDirectory {
+struct OpenDirectoryMutableState {
     // TODO: support really big directories. We may not be able to hold all entries in memory at the same time.
-    names: tokio::sync::Mutex<BTreeMap<String, NamedEntry>>,
+    names: BTreeMap<String, NamedEntry>,
+}
+
+impl OpenDirectoryMutableState {
+    fn new(names: BTreeMap<String, NamedEntry>) -> Self {
+        Self { names }
+    }
+}
+
+#[derive(Debug)]
+pub struct OpenDirectory {
+    state: tokio::sync::Mutex<OpenDirectoryMutableState>,
     storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
     change_event_sender: tokio::sync::watch::Sender<()>,
     _change_event_receiver: tokio::sync::watch::Receiver<()>,
@@ -205,14 +216,14 @@ pub struct OpenDirectory {
 
 impl OpenDirectory {
     pub fn new(
-        names: tokio::sync::Mutex<BTreeMap<String, NamedEntry>>,
+        names: BTreeMap<String, NamedEntry>,
         storage: Arc<(dyn LoadStoreValue + Send + Sync)>,
         modified: std::time::SystemTime,
         clock: WallClock,
     ) -> Self {
         let (change_event_sender, change_event_receiver) = tokio::sync::watch::channel(());
         Self {
-            names,
+            state: Mutex::new(OpenDirectoryMutableState::new(names)),
             storage,
             change_event_sender,
             _change_event_receiver: change_event_receiver,
@@ -236,12 +247,7 @@ impl OpenDirectory {
                 ),
             )
         }));
-        OpenDirectory::new(
-            tokio::sync::Mutex::new(names),
-            storage.clone(),
-            modified,
-            clock,
-        )
+        OpenDirectory::new(names, storage.clone(), modified, clock)
     }
 
     pub fn modified(&self) -> std::time::SystemTime {
@@ -249,8 +255,8 @@ impl OpenDirectory {
     }
 
     async fn read(&self) -> Stream<MutableDirectoryEntry> {
-        let names_locked = self.names.lock().await;
-        let snapshot = names_locked.clone();
+        let state_locked = self.state.lock().await;
+        let snapshot = state_locked.names.clone();
         info!("Reading directory with {} entries", snapshot.len());
         Box::pin(stream! {
             for cached_entry in snapshot {
@@ -261,8 +267,8 @@ impl OpenDirectory {
     }
 
     async fn get_meta_data(&self, name: &str) -> Result<DirectoryEntryMetaData> {
-        let names_locked = self.names.lock().await;
-        match names_locked.get(name) {
+        let state_locked = self.state.lock().await;
+        match state_locked.names.get(name) {
             Some(found) => {
                 let found_clone = (*found).clone();
                 Ok(found_clone.get_meta_data().await)
@@ -272,8 +278,8 @@ impl OpenDirectory {
     }
 
     async fn open_file(&self, name: &str) -> Result<Arc<OpenFile>> {
-        let mut names_locked = self.names.lock().await;
-        match names_locked.get_mut(name) {
+        let mut state_locked = self.state.lock().await;
+        match state_locked.names.get_mut(name) {
             Some(found) => match found {
                 NamedEntry::NotOpen(meta_data, digest) => match meta_data.kind {
                     DirectoryEntryKind::Directory => todo!(),
@@ -302,7 +308,7 @@ impl OpenDirectory {
                     (self.clock)(),
                 ));
                 info!("Adding file {} to the directory which sends a change event for its parent directory.", &name);
-                names_locked.insert(
+                state_locked.names.insert(
                     name.to_string(),
                     NamedEntry::OpenRegularFile(open_file.clone()),
                 );
@@ -360,8 +366,8 @@ impl OpenDirectory {
     }
 
     async fn open_subdirectory(&self, name: String) -> Result<Arc<OpenDirectory>> {
-        let mut names_locked = self.names.lock().await;
-        match names_locked.get_mut(&name) {
+        let mut state_locked = self.state.lock().await;
+        match state_locked.names.get_mut(&name) {
             Some(found) => {
                 match found {
                     NamedEntry::NotOpen(meta_data, digest) => match meta_data.kind {
@@ -407,8 +413,8 @@ impl OpenDirectory {
     }
 
     async fn create_directory(&self, name: String) -> Result<()> {
-        let mut names_locked = self.names.lock().await;
-        match names_locked.get(&name) {
+        let mut state_locked = self.state.lock().await;
+        match state_locked.names.get(&name) {
             Some(_found) => todo!(),
             None => {
                 info!(
@@ -416,10 +422,10 @@ impl OpenDirectory {
                     &name
                 );
                 self.change_event_sender.send(()).unwrap();
-                names_locked.insert(
+                state_locked.names.insert(
                     name,
                     NamedEntry::OpenSubdirectory(Arc::new(OpenDirectory::new(
-                        Mutex::new(BTreeMap::new()),
+                        BTreeMap::new(),
                         self.storage.clone(),
                         (self.clock)(),
                         self.clock,
@@ -431,13 +437,13 @@ impl OpenDirectory {
     }
 
     pub async fn remove(&self, name_here: &str) -> Result<()> {
-        let mut names_locked = self.names.lock().await;
-        if !names_locked.contains_key(name_here) {
+        let mut state_locked = self.state.lock().await;
+        if !state_locked.names.contains_key(name_here) {
             return Err(Error::NotFound(name_here.to_string()));
         }
 
         self.change_event_sender.send(()).unwrap();
-        names_locked.remove(name_here);
+        state_locked.names.remove(name_here);
         Ok(())
     }
 
@@ -447,26 +453,26 @@ impl OpenDirectory {
         there: &OpenDirectory,
         name_there: &str,
     ) -> Result<()> {
-        let mut names_locked: MutexGuard<'_, BTreeMap<String, NamedEntry>>;
-        let names_there_locked: Option<MutexGuard<'_, BTreeMap<String, NamedEntry>>>;
+        let mut state_locked: MutexGuard<'_, _>;
+        let state_there_locked: Option<MutexGuard<'_, _>>;
 
         let comparison = std::ptr::from_ref(self).cmp(&std::ptr::from_ref(there));
         match comparison {
             std::cmp::Ordering::Less => {
-                names_locked = self.names.lock().await;
-                names_there_locked = Some(there.names.lock().await);
+                state_locked = self.state.lock().await;
+                state_there_locked = Some(there.state.lock().await);
             }
             std::cmp::Ordering::Equal => {
-                names_locked = self.names.lock().await;
-                names_there_locked = None;
+                state_locked = self.state.lock().await;
+                state_there_locked = None;
             }
             std::cmp::Ordering::Greater => {
-                names_there_locked = Some(there.names.lock().await);
-                names_locked = self.names.lock().await;
+                state_there_locked = Some(there.state.lock().await);
+                state_locked = self.state.lock().await;
             }
         }
 
-        match names_locked.get(name_here) {
+        match state_locked.names.get(name_here) {
             Some(_) => {}
             None => return Err(Error::NotFound(name_here.to_string())),
         }
@@ -477,27 +483,27 @@ impl OpenDirectory {
         );
 
         self.change_event_sender.send(()).unwrap();
-        if names_there_locked.is_some() {
+        if state_there_locked.is_some() {
             there.change_event_sender.send(()).unwrap();
         }
 
-        let (_obsolete_name, entry) = names_locked.remove_entry(name_here).unwrap();
-        match names_there_locked {
+        let (_obsolete_name, entry) = state_locked.names.remove_entry(name_here).unwrap();
+        match state_there_locked {
             Some(value) => Self::write_into_directory(value, name_there, entry),
-            None => Self::write_into_directory(names_locked, name_there, entry),
+            None => Self::write_into_directory(state_locked, name_there, entry),
         }
         Ok(())
     }
 
     fn write_into_directory(
-        mut names: MutexGuard<'_, BTreeMap<String, NamedEntry>>,
+        mut state: MutexGuard<'_, OpenDirectoryMutableState>,
         name_there: &str,
         entry: NamedEntry,
     ) {
-        match names.get_mut(name_there) {
+        match state.names.get_mut(name_there) {
             Some(existing_name) => *existing_name = entry,
             None => {
-                names.insert(name_there.to_string(), entry);
+                state.names.insert(name_there.to_string(), entry);
             }
         };
     }
@@ -521,7 +527,7 @@ impl OpenDirectory {
         >,
     > {
         Box::pin(async move {
-            let names_locked = self.names.lock().await;
+            let state_locked = self.state.lock().await;
             let mut children = std::collections::BTreeMap::new();
             let mut references = Vec::new();
             let mut directories_open_count: usize=/*count self*/ 1;
@@ -545,7 +551,7 @@ impl OpenDirectory {
                 })]
             };
             let mut store_error: Option<StoreError> = None;
-            for entry in names_locked.iter() {
+            for entry in state_locked.names.iter() {
                 let name = FileName::try_from(entry.0.as_str()).unwrap();
                 let (maybe_named_entry_status, maybe_next_change_future) =
                     entry.1.wait_for_next_change().await;
@@ -1266,10 +1272,10 @@ mod tests {
         let modified = test_clock();
         let expected = DirectoryEntryMetaData::new(DirectoryEntryKind::File(12), modified);
         let directory = OpenDirectory::new(
-            tokio::sync::Mutex::new(BTreeMap::from([(
+            BTreeMap::from([(
                 "test.txt".to_string(),
                 NamedEntry::NotOpen(expected.clone(), BlobDigest::hash(&[])),
-            )])),
+            )]),
             Arc::new(NeverUsedStorage {}),
             modified,
             test_clock,
@@ -1284,10 +1290,10 @@ mod tests {
         let expected = DirectoryEntryMetaData::new(DirectoryEntryKind::File(12), modified);
         let storage = Arc::new(InMemoryValueStorage::empty());
         let directory = OpenDirectory::new(
-            tokio::sync::Mutex::new(BTreeMap::from([(
+            BTreeMap::from([(
                 "test.txt".to_string(),
                 NamedEntry::NotOpen(expected.clone(), BlobDigest::hash(&[])),
-            )])),
+            )]),
             storage.clone(),
             modified,
             test_clock,
@@ -1316,7 +1322,7 @@ mod tests {
     async fn test_open_directory_open_file() {
         let modified = test_clock();
         let directory = OpenDirectory::new(
-            tokio::sync::Mutex::new(BTreeMap::new()),
+            BTreeMap::new(),
             Arc::new(NeverUsedStorage {}),
             modified,
             test_clock,
@@ -1344,7 +1350,7 @@ mod tests {
     async fn test_read_directory_after_file_write() {
         let modified = test_clock();
         let directory = OpenDirectory::new(
-            tokio::sync::Mutex::new(BTreeMap::new()),
+            BTreeMap::new(),
             Arc::new(NeverUsedStorage {}),
             modified,
             test_clock,
@@ -1369,7 +1375,7 @@ mod tests {
     async fn test_get_meta_data_after_file_write() {
         let modified = test_clock();
         let directory = OpenDirectory::new(
-            tokio::sync::Mutex::new(BTreeMap::new()),
+            BTreeMap::new(),
             Arc::new(NeverUsedStorage {}),
             modified,
             test_clock,
