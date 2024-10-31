@@ -1884,7 +1884,6 @@ dependencies = [
  "anyhow",
  "argparse",
  "async-scoped",
- "cap-std",
  "display_bytes",
  "essrpc",
  "management_interface",

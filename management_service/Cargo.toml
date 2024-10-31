@@ -23,7 +23,6 @@ postcard = {version = "1", features = []}
 serde = {version = "1", features = []}
 wat = "1"
 async-scoped = {version = "0", features = ["use-tokio"]}
-cap-std = "3"
 argparse = "0"
 tempfile = "3"
 rustls = { version = "0", default-features = false, features = ["std", "ring"] }
