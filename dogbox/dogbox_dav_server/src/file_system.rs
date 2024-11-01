@@ -188,8 +188,23 @@ impl dav_server::fs::DavFile for DogBoxOpenFile {
         })
     }
 
-    fn seek(&mut self, _pos: std::io::SeekFrom) -> dav_server::fs::FsFuture<u64> {
-        todo!()
+    fn seek(&mut self, pos: std::io::SeekFrom) -> dav_server::fs::FsFuture<u64> {
+        let open_file = self.handle.clone();
+        Box::pin(async move {
+            match pos {
+                std::io::SeekFrom::Start(offset) => {
+                    self.cursor = offset;
+                }
+                std::io::SeekFrom::End(offset) => {
+                    let size = open_file.size().await;
+                    self.cursor = size.saturating_add_signed(offset);
+                }
+                std::io::SeekFrom::Current(offset) => {
+                    self.cursor = self.cursor.saturating_add_signed(offset);
+                }
+            }
+            Ok(self.cursor)
+        })
     }
 
     fn flush(&mut self) -> dav_server::fs::FsFuture<()> {

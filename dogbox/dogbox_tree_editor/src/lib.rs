@@ -1511,11 +1511,12 @@ impl OpenFile {
         self.modified
     }
 
+    pub async fn size(&self) -> u64 {
+        self.content.lock().await.size()
+    }
+
     pub async fn get_meta_data(&self) -> DirectoryEntryMetaData {
-        DirectoryEntryMetaData::new(
-            DirectoryEntryKind::File(self.content.lock().await.size()),
-            self.modified,
-        )
+        DirectoryEntryMetaData::new(DirectoryEntryKind::File(self.size().await), self.modified)
     }
 
     pub async fn request_save(&self) -> std::result::Result<OpenFileStatus, StoreError> {
