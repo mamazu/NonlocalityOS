@@ -13,6 +13,7 @@ use astraea::{
 use dogbox_tree_editor::{OpenFileContentBuffer, OptimizedWriteBuffer};
 use libfuzzer_sys::{fuzz_target, Corpus};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 use std::{collections::BTreeSet, sync::Arc};
 use tokio::runtime::Runtime;
 
@@ -181,7 +182,7 @@ fn run_generated_test(test: GeneratedTest) -> Corpus {
                 );
             }
 
-            println!("{:?}", &operation);
+            info!("{:?}", &operation);
             match &operation {
                 FileOperation::Write { position, data } => {
                     if (*position as usize + data.len()) > max_tested_file_size {
@@ -272,6 +273,6 @@ fuzz_target!(|data: &[u8]| -> libfuzzer_sys::Corpus {
         }
         Err(_) => return libfuzzer_sys::Corpus::Reject,
     };
-    println!("{:?}", &generated_test);
+    info!("{:?}", &generated_test);
     run_generated_test(generated_test)
 });

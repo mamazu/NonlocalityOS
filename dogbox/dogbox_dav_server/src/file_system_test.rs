@@ -42,7 +42,7 @@ mod tests {
         let address = SocketAddr::from(([127, 0, 0, 1], 0));
         let listener = TcpListener::bind(address).await.unwrap();
         let actual_address = listener.local_addr().unwrap();
-        println!("Serving on http://{}", actual_address);
+        info!("Serving on http://{}", actual_address);
 
         let serve = || async {
             loop {

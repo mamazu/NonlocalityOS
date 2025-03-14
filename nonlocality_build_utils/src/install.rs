@@ -1,10 +1,10 @@
+use crate::run::ReportProgress;
 use relative_path::RelativePath;
 use ssh2::OpenFlags;
-use std::sync::Arc;
+use std::{net::SocketAddr, pin::Pin, sync::Arc};
+use tracing::info;
 
-use crate::run::{NumberOfErrors, ReportProgress};
-
-pub const MANAGEMENT_SERVICE_NAME: &str = "management_service";
+pub const NONLOCALITY_HOST_BINARY_NAME: &str = "nonlocality_host";
 
 fn to_std_path(linux_path: &relative_path::RelativePath) -> std::path::PathBuf {
     linux_path.to_path(std::path::Path::new("/"))
@@ -17,13 +17,13 @@ fn upload_file(
     to: &RelativePath,
     is_executable: bool,
 ) {
-    println!("Uploading {} to {}", from.display(), to);
+    info!("Uploading {} to {}", from.display(), to);
     let mut file_to_upload = std::fs::File::open(from).expect("Tried to open the binary to upload");
     let file_size = file_to_upload
         .metadata()
         .expect("Tried to determine the file size")
         .len();
-    println!("Uploading file with {} bytes", file_size);
+    info!("Uploading file with {} bytes", file_size);
 
     let mode = match is_executable {
         true => 0o755,
@@ -47,13 +47,13 @@ fn upload_file(
     let mut standard_output = String::new();
     std::io::Read::read_to_string(&mut channel, &mut standard_output)
         .expect("Tried to read standard output");
-    println!("{}", standard_output);
+    info!("{}", standard_output);
     channel.wait_close().expect("Waited for close");
     assert_eq!(0, channel.exit_status().unwrap());
 }
 
 async fn run_simple_ssh_command(session: &ssh2::Session, command: &str) {
-    println!("Running {}", command);
+    info!("Running {}", command);
     let mut channel: ssh2::Channel = session.channel_session().unwrap();
     channel.exec(command).expect("Tried exec");
 
@@ -64,7 +64,7 @@ async fn run_simple_ssh_command(session: &ssh2::Session, command: &str) {
         &mut standard_output,
     )
     .expect("Tried to read standard output");
-    println!("Standard output: {}", standard_output);
+    info!("Standard output: {}", standard_output);
 
     let mut standard_error = String::new();
     let standard_error_stream_id = ssh2::EXTENDED_DATA_STDERR;
@@ -73,27 +73,77 @@ async fn run_simple_ssh_command(session: &ssh2::Session, command: &str) {
         &mut standard_error,
     )
     .expect("Tried to read standard error");
-    println!("Standard error: {}", standard_error);
+    info!("Standard error: {}", standard_error);
 
     channel.wait_close().expect("Waited for close");
     let exit_code = channel.exit_status().unwrap();
-    println!("Exit code: {}", exit_code);
+    info!("Exit code: {}", exit_code);
     assert_eq!(0, exit_code);
 }
 
-pub async fn deploy(
-    local_configuration: &std::path::Path,
-    management_service_binary: &std::path::Path,
-    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
-) -> NumberOfErrors {
-    dotenv::dotenv().ok();
-    let ssh_endpoint = std::env::var("ASTRA_DEPLOY_SSH_ENDPOINT")
-        .expect("Tried to read env variable ASTRA_DEPLOY_SSH_ENDPOINT");
-    let ssh_user = std::env::var("ASTRA_DEPLOY_SSH_USER")
-        .expect("Tried to read env variable ASTRA_DEPLOY_SSH_USER");
-    let ssh_password = std::env::var("ASTRA_DEPLOY_SSH_PASSWORD")
-        .expect("Tried to read env variable ASTRA_DEPLOY_SSH_PASSWORD");
+#[derive(Clone, Debug)]
+pub enum BuildTarget {
+    LinuxAmd64,
+    RaspberryPi64,
+}
 
+fn detect_remote_build_target(session: &ssh2::Session) -> std::io::Result<BuildTarget> {
+    let mut channel = session.channel_session().unwrap();
+    let command = "/bin/bash -c 'uname -m'";
+    info!("SSH command '{}'", command);
+    channel.exec(command)?;
+    let mut standard_output = String::new();
+    std::io::Read::read_to_string(&mut channel, &mut standard_output)?;
+    channel.wait_close()?;
+    let exit_code = channel.exit_status()?;
+    info!("SSH command '{}' exited with {}", command, exit_code);
+    info!(
+        "SSH command '{}' standard output: {}",
+        command, &standard_output
+    );
+    assert_eq!(0, exit_code);
+    let trimmed = standard_output.trim();
+    let target = match trimmed {
+        "x86_64" => BuildTarget::LinuxAmd64,
+        "aarch64" => BuildTarget::RaspberryPi64,
+        "armv7l" => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "32-bit ARM systems such as the Raspberry Pi 2 are currently not supported"
+                ),
+            ))
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Unknown architecture: {}", trimmed),
+            ))
+        }
+    };
+    info!("Remote target detected: {:?}", &target);
+    Ok(target)
+}
+
+pub type BuildHostBinary = dyn FnOnce(
+    &std::path::Path,
+    &BuildTarget,
+    &Arc<dyn ReportProgress + Sync + Send>,
+) -> Pin<
+    Box<dyn std::future::Future<Output = std::io::Result<()>> + Sync + Send>,
+>;
+
+pub const INITIAL_DATABASE_FILE_NAME: &str = "initial_database.sqlite3";
+
+pub async fn deploy(
+    initial_database: &std::path::Path,
+    build_host_binary: Box<BuildHostBinary>,
+    ssh_endpoint: &SocketAddr,
+    ssh_user: &str,
+    ssh_password: &str,
+    progress_reporter: &Arc<dyn ReportProgress + Sync + Send>,
+) -> std::io::Result<()> {
+    info!("Connecting to {}", &ssh_endpoint);
     let tcp = std::net::TcpStream::connect(&ssh_endpoint).unwrap();
     let mut session = ssh2::Session::new().unwrap();
     session.set_tcp_stream(tcp);
@@ -101,8 +151,13 @@ pub async fn deploy(
         Ok(_) => {}
         Err(error) => progress_reporter.log(&format!("Could not SSH handshake: {}", error)),
     }
+
+    info!("Authenticating as {} using password", &ssh_user);
     session.userauth_password(&ssh_user, &ssh_password).unwrap();
     assert!(session.authenticated());
+    info!("Authenticated as {}", &ssh_user);
+
+    let remote_build_target = detect_remote_build_target(&session).unwrap();
 
     let sftp = session.sftp().expect("Tried to open SFTP");
     let home = relative_path::RelativePath::new("/home").join(ssh_user);
@@ -110,68 +165,75 @@ pub async fn deploy(
         .stat(&to_std_path(&home))
         .expect("Tried to stat home on the remote");
     if !home_found.is_dir() {
-        progress_reporter.log(&format!("Expected a directory at remote location {}", home));
-        return NumberOfErrors(1);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Expected a directory at remote location {}", home),
+        ));
     }
 
     let nonlocality_dir = home.join(".nonlocality");
     match sftp.stat(&to_std_path(&nonlocality_dir)) {
         Ok(exists) => {
             if exists.is_dir() {
-                println!("Our directory appears to exist.");
+                info!("Our directory appears to exist.");
             } else {
-                progress_reporter.log("Our directory is a file!");
-                return NumberOfErrors(1);
+                let message = format!(
+                    "Our directory {} exists, but is not a directory",
+                    nonlocality_dir
+                );
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    message,
+                ));
             }
         }
         Err(error) => {
-            println!("Could not stat our directory: {}", error);
-            println!("Creating directory {}", nonlocality_dir);
+            info!("Could not stat our directory: {}", error);
+            info!("Creating directory {}", nonlocality_dir);
             sftp.mkdir(&to_std_path(&nonlocality_dir), 0o755)
                 .expect("Tried to create our directory on the remote");
         }
     }
 
-    let remote_management_service_binary_next =
-        nonlocality_dir.join(format!("{}.next", MANAGEMENT_SERVICE_NAME));
+    let temporary_directory = tempfile::tempdir().unwrap();
+    let host_binary = temporary_directory
+        .path()
+        .join(NONLOCALITY_HOST_BINARY_NAME);
+    build_host_binary(&host_binary, &remote_build_target, progress_reporter).await?;
+
+    let remote_host_binary_next =
+        nonlocality_dir.join(format!("{}.next", NONLOCALITY_HOST_BINARY_NAME));
     upload_file(
         &session,
         &sftp,
-        management_service_binary,
-        &remote_management_service_binary_next,
+        &host_binary,
+        &remote_host_binary_next,
         true,
     );
-    let remote_management_service_binary = nonlocality_dir.join(MANAGEMENT_SERVICE_NAME);
+    drop(host_binary);
+    drop(temporary_directory);
+
+    let remote_host_binary = nonlocality_dir.join(NONLOCALITY_HOST_BINARY_NAME);
     // Sftp.rename doesn't work (error "4", and it's impossible to find documentation on what "4" means).
     run_simple_ssh_command(
         &session,
         // TODO: encode command line arguments correctly
         &format!(
             "/usr/bin/mv {} {}",
-            &remote_management_service_binary_next, &remote_management_service_binary
+            &remote_host_binary_next, &remote_host_binary
         ),
     )
     .await;
 
-    let remote_configuration = nonlocality_dir.join("cluster_configuration");
-    upload_file(
-        &session,
-        &sftp,
-        local_configuration,
-        &remote_configuration,
-        false,
-    );
+    let remote_database = nonlocality_dir.join(INITIAL_DATABASE_FILE_NAME);
+    upload_file(&session, &sftp, initial_database, &remote_database, false);
 
-    let filesystem_access_root = nonlocality_dir.join("filesystem_access");
     let sudo = RelativePath::new("/usr/bin/sudo");
     run_simple_ssh_command(
         &session,
-        &format!(
-            "{} {} {} --filesystem_access_root {} --install",
-            sudo, remote_management_service_binary, remote_configuration, filesystem_access_root
-        ),
+        &format!("{} {} install", sudo, remote_host_binary),
     )
     .await;
 
-    NumberOfErrors(0)
+    Ok(())
 }

@@ -1,11 +1,13 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 ./scripts/install_sccache.sh || exit 1
 export RUSTC_WRAPPER=sccache
 
 repository=$(dirname "$0")
 command=$1
-RUST_BACKTRACE=full
+export RUST_BACKTRACE=1
 
-cargo run --bin astra --release -- $repository $command || exit 1
+pushd $repository || exit 1
+cargo run --bin astra --release -- $command || exit 1
+popd
 
 echo Success!

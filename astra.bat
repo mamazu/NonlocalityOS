@@ -6,9 +6,11 @@ setlocal
 set RUSTC_WRAPPER=sccache
 set repository=%~dp0
 set command=%1
-set RUST_BACKTRACE=full
+set RUST_BACKTRACE=1
 
-cargo run --bin astra -- %repository% %command% || exit /B 1
+pushd %repository% || exit /B 1
+cargo run --bin astra -- %command% || exit /B 1
+popd
 
 echo Success!
 endlocal
