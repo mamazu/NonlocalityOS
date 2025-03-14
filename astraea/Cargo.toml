@@ -23,17 +23,12 @@ bytes = "1"
 cached = "0"
 async-trait = "0"
 async-scoped = {version = "0", features = ["use-tokio"]}
+rusqlite = {version = "0", features = ["bundled"]}
 
 [dev-dependencies]
 proptest = "1"
 rand = { version = "0", features = [ "small_rng", "min_const_gen" ]}
 test-log = {version = "0", features = ["trace", "log", "color"]}
-
-[target.'cfg(target_os = "linux")'.dependencies]
-rusqlite = {version = "0", features = ["bundled-sqlcipher"]}
-
-[target.'cfg(target_os = "windows")'.dependencies]
-rusqlite = {version = "0", features = ["bundled"]}
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0"

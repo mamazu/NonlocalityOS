@@ -1,4 +1,3 @@
-pub mod coverage;
 pub mod downloads;
 pub mod host;
 pub mod install;

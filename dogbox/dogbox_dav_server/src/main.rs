@@ -245,12 +245,12 @@ async fn run_dav_server(
         match SQLiteStorage::create_schema(&sqlite_connection) {
             Ok(_) => {}
             Err(error) => {
-                println!(
+                info!(
                     "Could not create SQL schema in {}: {:?}",
                     &database_file_name.display(),
                     &error
                 );
-                println!("Deleting {}", &database_file_name.display());
+                info!("Deleting {}", &database_file_name.display());
                 std::fs::remove_file(&database_file_name).unwrap();
                 panic!();
             }

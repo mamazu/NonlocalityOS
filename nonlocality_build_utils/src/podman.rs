@@ -1,6 +1,7 @@
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::path::Path;
+    use tracing::{error, info, warn};
 
     async fn enable_podman_unix_socket() {
         let program = Path::new("/usr/bin/systemctl");
@@ -15,22 +16,22 @@ mod tests {
             .await;
         let output = match maybe_output {
             Ok(output) => output,
-            Err(error) => {
-                println!("Failed to spawn {} process: {}.", program.display(), error);
+            Err(err) => {
+                error!("Failed to spawn {} process: {}.", program.display(), err);
                 panic!()
             }
         };
         if output.status.success() {
             return;
         }
-        println!("Executable: {}", program.display());
-        println!("Exit status: {}", output.status);
-        println!("Standard output:");
+        info!("Executable: {}", program.display());
+        info!("Exit status: {}", output.status);
+        info!("Standard output:");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        println!("{}", &stdout);
-        println!("Standard error:");
+        info!("{}", &stdout);
+        info!("Standard error:");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        println!("{}", &stderr);
+        info!("{}", &stderr);
         panic!()
     }
 
@@ -41,7 +42,7 @@ mod tests {
             format!("/run/user/{}/podman/podman.sock", uzers::get_current_uid()),
             podman_api::ApiVersion::new(4, Some(3), Some(1)),
         );
-        println!("Socket enabled");
+        info!("Socket enabled");
         let image_id = 'a: {
             let docker_image_name_bla = "ubuntu:24.04";
             // We only want to pull from the global Docker registry if we really have to due to rate limiting for free users.
@@ -52,7 +53,7 @@ mod tests {
                         break 'a existing_id;
                     }
                 }
-                Err(error) => println!(
+                Err(error) => info!(
                     "Could not find local image {}: {:?}",
                     docker_image_name_bla, &error
                 ),
@@ -75,7 +76,7 @@ mod tests {
                 .unwrap();
             let mut image_id_result = None;
             for event in events {
-                println!("{:?}", &event);
+                info!("{:?}", &event);
                 match event.id {
                     None => {}
                     Some(result) => image_id_result = Some(result),
@@ -95,9 +96,9 @@ mod tests {
             .await
             .unwrap();
         for warning in container_created.warnings {
-            println!("{}", &warning);
+            warn!("{}", &warning);
         }
-        println!("Container ID: {}", container_created.id);
+        info!("Container ID: {}", container_created.id);
 
         // there isn't really documentation for the podman API
         let expected_status = match podman.version().await.unwrap().version.unwrap().as_str() {
@@ -131,10 +132,10 @@ mod tests {
             while let Some(chunk) = futures_util::StreamExt::next(&mut logs).await {
                 match chunk.unwrap() {
                     podman_api::conn::TtyChunk::StdOut(data) => {
-                        println!("{}", String::from_utf8_lossy(&data));
+                        info!("{}", String::from_utf8_lossy(&data));
                     }
                     podman_api::conn::TtyChunk::StdErr(data) => {
-                        eprintln!("{}", String::from_utf8_lossy(&data));
+                        error!("{}", String::from_utf8_lossy(&data));
                     }
                     _ => {}
                 }
@@ -154,7 +155,7 @@ mod tests {
                 .as_deref()
         );
 
-        println!(
+        info!(
             "{:?}",
             container.inspect().await.unwrap().state.unwrap().status
         );
@@ -175,10 +176,10 @@ mod tests {
         while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
             match chunk.unwrap() {
                 podman_api::conn::TtyChunk::StdOut(data) => {
-                    println!("{}", String::from_utf8_lossy(&data));
+                    info!("{}", String::from_utf8_lossy(&data));
                 }
                 podman_api::conn::TtyChunk::StdErr(data) => {
-                    eprintln!("{}", String::from_utf8_lossy(&data));
+                    error!("{}", String::from_utf8_lossy(&data));
                 }
                 _ => {}
             }

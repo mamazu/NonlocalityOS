@@ -16,9 +16,4 @@ bytes = "1"
 serde = "1"
 async-trait = "0"
 postcard = {version = "1", features = ["alloc"]}
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-rusqlite = {version = "0", features = ["bundled-sqlcipher"]}
-
-[target.'cfg(target_os = "windows")'.dev-dependencies]
 rusqlite = {version = "0", features = ["bundled"]}

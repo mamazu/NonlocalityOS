@@ -8,3 +8,4 @@
 /dogbox_dav_server.sqlite-journal
 /build_rs_cov.profraw
 /profile.json
+.env

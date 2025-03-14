@@ -20,11 +20,6 @@ lazy_static = "1"
 async-trait = "0"
 cached = "0"
 test-log = {version = "0", features = ["trace", "log", "color"]}
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-rusqlite = {version = "0", features = ["bundled-sqlcipher"]}
-
-[target.'cfg(target_os = "windows")'.dev-dependencies]
 rusqlite = {version = "0", features = ["bundled"]}
 
 [dev-dependencies]

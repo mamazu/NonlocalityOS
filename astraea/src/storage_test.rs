@@ -7,61 +7,6 @@ mod tests {
     use bytes::Bytes;
     use std::sync::Arc;
 
-    #[test_log::test(tokio::test)]
-    async fn test_sqlcipher_encryption() {
-        let temporary_directory = tempfile::tempdir().unwrap();
-        let database_file_name = temporary_directory.path().join("test.sqlite");
-        let expected_reference = BlobDigest::new(&[
-            166, 159, 115, 204, 162, 58, 154, 197, 200, 181, 103, 220, 24, 90, 117, 110, 151, 201,
-            130, 22, 79, 226, 88, 89, 224, 209, 220, 193, 71, 92, 128, 166, 21, 178, 18, 58, 241,
-            245, 249, 76, 17, 227, 233, 64, 44, 58, 197, 88, 245, 0, 25, 157, 149, 182, 211, 227,
-            1, 117, 133, 134, 40, 29, 205, 38,
-        ]);
-        let correct_key = "test1234";
-        {
-            let connection1 = rusqlite::Connection::open(&database_file_name).unwrap();
-            connection1.pragma_update(None, "key", correct_key).unwrap();
-            SQLiteStorage::create_schema(&connection1).unwrap();
-            let storage = SQLiteStorage::from(connection1).unwrap();
-            let reference = storage
-                .store_value(&HashedValue::from(Arc::new(Value::empty())))
-                .await
-                .unwrap();
-            assert_eq!(expected_reference, reference);
-            storage.commit_changes().await.unwrap();
-        }
-        // TODO: solve OpenSSL rebuild issues on Windows
-        #[cfg(target_os = "linux")]
-        {
-            let incorrect_key = "test12345";
-            let connection2 = rusqlite::Connection::open(&database_file_name).unwrap();
-            connection2
-                .pragma_update(None, "key", incorrect_key)
-                .unwrap();
-            let result = SQLiteStorage::from(connection2).err();
-            let expected = Some(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error {
-                    code: rusqlite::ErrorCode::NotADatabase,
-                    extended_code: 26,
-                },
-                Some("file is not a database".to_string()),
-            ));
-            assert_eq!(&expected, &result);
-        }
-        {
-            let connection3 = rusqlite::Connection::open(&database_file_name).unwrap();
-            connection3.pragma_update(None, "key", correct_key).unwrap();
-            let storage = SQLiteStorage::from(connection3).unwrap();
-            let loaded_back = storage
-                .load_value(&expected_reference)
-                .await
-                .unwrap()
-                .hash()
-                .unwrap();
-            assert_eq!(HashedValue::from(Arc::new(Value::empty())), loaded_back);
-        }
-    }
-
     #[test]
     fn test_create_schema() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();

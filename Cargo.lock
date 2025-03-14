@@ -119,13 +119,18 @@ checksum = "dde20b3d026af13f561bdd0f15edf01fc734f0dafcedbaf42bba506a9517f223"
 name = "astra"
 version = "0.1.0"
 dependencies = [
+ "astraea",
  "async-recursion",
  "dotenv",
  "nonlocality_build_utils",
  "relative-path",
+ "rusqlite",
  "serde",
  "ssh2",
+ "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1812,7 +1817,6 @@ name = "nonlocality_build_utils"
 version = "0.1.0"
 dependencies = [
  "curl",
- "dotenv",
  "flate2",
  "fs_extra",
  "futures-util",
@@ -1822,6 +1826,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tracing",
  "uzers",
  "xz2",
 ]
@@ -1832,7 +1837,10 @@ version = "0.1.0"
 dependencies = [
  "astraea",
  "lambda",
+ "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
