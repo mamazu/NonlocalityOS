@@ -4,8 +4,6 @@ use ssh2::OpenFlags;
 use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Instant};
 use tracing::info;
 
-pub const NONLOCALITY_HOST_BINARY_NAME: &str = "nonlocality_host";
-
 fn to_std_path(linux_path: &relative_path::RelativePath) -> std::path::PathBuf {
     linux_path.to_path(std::path::Path::new("/"))
 }
@@ -150,6 +148,7 @@ pub const INITIAL_DATABASE_FILE_NAME: &str = "initial_database.sqlite3";
 pub async fn deploy(
     initial_database: &std::path::Path,
     build_host_binary: Box<BuildHostBinary>,
+    host_binary_name: &str,
     ssh_endpoint: &SocketAddr,
     ssh_user: &str,
     ssh_password: &str,
@@ -208,13 +207,10 @@ pub async fn deploy(
     }
 
     let temporary_directory = tempfile::tempdir().unwrap();
-    let host_binary = temporary_directory
-        .path()
-        .join(NONLOCALITY_HOST_BINARY_NAME);
+    let host_binary = temporary_directory.path().join(host_binary_name);
     build_host_binary(&host_binary, &remote_build_target, progress_reporter).await?;
 
-    let remote_host_binary_next =
-        nonlocality_dir.join(format!("{}.next", NONLOCALITY_HOST_BINARY_NAME));
+    let remote_host_binary_next = nonlocality_dir.join(format!("{}.next", host_binary_name));
     upload_file(
         &session,
         &sftp,
@@ -225,7 +221,7 @@ pub async fn deploy(
     drop(host_binary);
     drop(temporary_directory);
 
-    let remote_host_binary = nonlocality_dir.join(NONLOCALITY_HOST_BINARY_NAME);
+    let remote_host_binary = nonlocality_dir.join(host_binary_name);
     // Sftp.rename doesn't work (error "4", and it's impossible to find documentation on what "4" means).
     run_simple_ssh_command(
         &session,

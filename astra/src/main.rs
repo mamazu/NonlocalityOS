@@ -5,7 +5,6 @@ use nonlocality_build_utils::install::deploy;
 use nonlocality_build_utils::install::BuildHostBinary;
 use nonlocality_build_utils::install::BuildTarget;
 use nonlocality_build_utils::install::INITIAL_DATABASE_FILE_NAME;
-use nonlocality_build_utils::install::NONLOCALITY_HOST_BINARY_NAME;
 use nonlocality_build_utils::raspberrypi::install_raspberry_pi_cpp_compiler;
 use nonlocality_build_utils::raspberrypi::run_cargo_build_for_raspberry_pi;
 use nonlocality_build_utils::raspberrypi::RaspberryPi64Target;
@@ -20,6 +19,8 @@ use std::sync::Arc;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
+
+const NONLOCALITY_HOST_BINARY_NAME: &str = "nonlocality_host";
 
 async fn run_cargo_build(
     working_directory: &std::path::Path,
@@ -139,6 +140,7 @@ async fn main() -> std::process::ExitCode {
     let result = deploy(
         &database_path,
         build,
+        NONLOCALITY_HOST_BINARY_NAME,
         &ssh_endpoint,
         &ssh_user,
         &ssh_password,
