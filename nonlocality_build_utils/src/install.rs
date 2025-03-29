@@ -1,7 +1,7 @@
 use crate::run::ReportProgress;
 use relative_path::RelativePath;
 use ssh2::OpenFlags;
-use std::{net::SocketAddr, pin::Pin, sync::Arc};
+use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Instant};
 use tracing::info;
 
 pub const NONLOCALITY_HOST_BINARY_NAME: &str = "nonlocality_host";
@@ -29,6 +29,7 @@ fn upload_file(
         true => 0o755,
         false => 0o644,
     };
+    let before_upload = Instant::now();
     let mut file_uploader = sftp
         .open_mode(
             &to_std_path(to),
@@ -41,6 +42,17 @@ fn upload_file(
         .expect("Tried to upload the file contents");
     std::io::Write::flush(&mut file_uploader).expect("Tried to flush file uploader");
     drop(file_uploader);
+    let after_upload = Instant::now();
+    let upload_duration = after_upload.duration_since(before_upload);
+    info!("Upload duration: {:.1} s", upload_duration.as_secs_f64());
+    let upload_speed = file_size as f64 / upload_duration.as_secs_f64();
+    let upload_speed_kb = upload_speed / 1_000.0;
+    let upload_speed_mb = upload_speed_kb / 1_000.0;
+    if upload_speed_mb >= 1.0 {
+        info!("Upload speed: {:.1} MB/s", upload_speed_mb);
+    } else {
+        info!("Upload speed: {:.1} KB/s", upload_speed_kb);
+    }
 
     let mut channel = session.channel_session().unwrap();
     channel.exec(&format!("file {}", to)).unwrap();
