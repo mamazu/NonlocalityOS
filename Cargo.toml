@@ -18,4 +18,5 @@ resolver="2"
 
 [profile.release]
 panic = "abort"
-debug = true
+# try to keep the nonlocality_host binary small so that uploads are quick
+debug = false
