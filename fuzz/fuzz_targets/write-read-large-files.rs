@@ -13,9 +13,9 @@ use astraea::{
 use dogbox_tree_editor::{OpenFileContentBuffer, OptimizedWriteBuffer};
 use libfuzzer_sys::{fuzz_target, Corpus};
 use serde::{Deserialize, Serialize};
-use tracing::info;
 use std::{collections::BTreeSet, sync::Arc};
 use tokio::runtime::Runtime;
+use tracing::info;
 
 struct BufferState {
     storage: Arc<InMemoryValueStorage>,

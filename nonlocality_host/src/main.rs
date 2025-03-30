@@ -7,9 +7,7 @@ async fn run_process(
     executable: &std::path::Path,
     arguments: &[&str],
 ) -> std::io::Result<()> {
-    info!("Executable: {}", executable.display());
-    info!("Arguments: {}", arguments.join(" "));
-    info!("Working directory: {}", working_directory.display());
+    info!("Run process: {} {:?}", executable.display(), arguments);
     let output = tokio::process::Command::new(executable)
         .args(arguments)
         .current_dir(&working_directory)
@@ -20,16 +18,20 @@ async fn run_process(
         .output()
         .await
         .expect("start process");
-    info!("Exit status: {}", output.status);
-    info!("Standard output:");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    info!("{}", &stdout);
-    info!("Standard error:");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    info!("{}", &stderr);
     if output.status.success() {
+        info!("Success");
         Ok(())
     } else {
+        info!("Working directory: {}", working_directory.display());
+        error!("Exit status: {}", output.status);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.is_empty() {
+            error!("Standard output:\n{}", stdout.trim_end());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.is_empty() {
+            error!("Standard error:\n{}", stderr.trim_end());
+        }
         Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("Process failed with exit code: {}", output.status),
@@ -68,6 +70,10 @@ WantedBy=multi-user.target
         .expect("write content of the service file");
     let systemd_services_directory = std::path::Path::new("/etc/systemd/system");
     let systemd_service_path = systemd_services_directory.join(service_file_name);
+    info!(
+        "Installing systemd service file to {}",
+        systemd_service_path.display()
+    );
     std::fs::rename(&temporary_file_path, &systemd_service_path)
         .expect("move temporary service file into systemd directory");
     let systemctl = std::path::Path::new("/usr/bin/systemctl");

@@ -2,7 +2,7 @@ use crate::run::ReportProgress;
 use relative_path::RelativePath;
 use ssh2::OpenFlags;
 use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Instant};
-use tracing::info;
+use tracing::{info, span, Level};
 
 fn to_std_path(linux_path: &relative_path::RelativePath) -> std::path::PathBuf {
     linux_path.to_path(std::path::Path::new("/"))
@@ -57,13 +57,14 @@ fn upload_file(
     let mut standard_output = String::new();
     std::io::Read::read_to_string(&mut channel, &mut standard_output)
         .expect("Tried to read standard output");
-    info!("{}", standard_output);
+    info!("file {}", standard_output.trim());
     channel.wait_close().expect("Waited for close");
     assert_eq!(0, channel.exit_status().unwrap());
 }
 
 async fn run_simple_ssh_command(session: &ssh2::Session, command: &str) {
-    info!("Running {}", command);
+    let span = span!(Level::INFO, "SSH", command = command);
+    let _enter = span.enter();
     let mut channel: ssh2::Channel = session.channel_session().unwrap();
     channel.exec(command).expect("Tried exec");
 
@@ -74,7 +75,9 @@ async fn run_simple_ssh_command(session: &ssh2::Session, command: &str) {
         &mut standard_output,
     )
     .expect("Tried to read standard output");
-    info!("Standard output: {}", standard_output);
+    if !standard_output.is_empty() {
+        info!("Standard output:\n{}", standard_output.trim_end());
+    }
 
     let mut standard_error = String::new();
     let standard_error_stream_id = ssh2::EXTENDED_DATA_STDERR;
@@ -83,12 +86,14 @@ async fn run_simple_ssh_command(session: &ssh2::Session, command: &str) {
         &mut standard_error,
     )
     .expect("Tried to read standard error");
-    info!("Standard error: {}", standard_error);
+    if !standard_error.is_empty() {
+        info!("Standard error:\n{}", standard_error.trim_end());
+    }
 
     channel.wait_close().expect("Waited for close");
     let exit_code = channel.exit_status().unwrap();
     info!("Exit code: {}", exit_code);
-    assert_eq!(0, exit_code);
+    assert_eq!(0, exit_code, "Expected exit code for success");
 }
 
 #[derive(Clone, Debug)]
@@ -236,6 +241,7 @@ pub async fn deploy(
     let remote_database = nonlocality_dir.join(INITIAL_DATABASE_FILE_NAME);
     upload_file(&session, &sftp, initial_database, &remote_database, false);
 
+    info!("Starting the host binary on the remote to install itself as a service.");
     let sudo = RelativePath::new("/usr/bin/sudo");
     run_simple_ssh_command(
         &session,
