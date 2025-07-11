@@ -1894,6 +1894,7 @@ dependencies = [
  "clap",
  "dogbox_dav_server",
  "lambda",
+ "rusqlite",
  "tempfile",
  "tokio",
  "tracing",
