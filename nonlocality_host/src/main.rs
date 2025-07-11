@@ -1,11 +1,12 @@
 #![feature(duration_constructors)]
 use crate::dav_server::dav_server_main;
 use clap::{Parser, Subcommand};
-use nonlocality_host::{INITIAL_DATABASE_FILE_NAME, INSTALLED_DATABASE_FILE_NAME};
 use std::{ffi::OsStr, path::Path};
 use tracing::{error, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 mod dav_server;
+use astraea::storage::SQLiteStorage;
+use nonlocality_host::INSTALLED_DATABASE_FILE_NAME;
 
 #[derive(Parser)]
 #[command(name = "nonlocality_host", about = "NonlocalityOS Host Service")]
@@ -88,7 +89,6 @@ async fn install(nonlocality_directory: &Path, host_binary_name: &OsStr) -> std:
     info!("Installing host from {}", nonlocality_directory.display());
     let executable = &nonlocality_directory.join(host_binary_name);
 
-    let initial_database = &nonlocality_directory.join(INITIAL_DATABASE_FILE_NAME);
     let installed_database = &make_installed_database_path(nonlocality_directory);
     if std::fs::exists(installed_database)? {
         warn!(
@@ -96,12 +96,10 @@ async fn install(nonlocality_directory: &Path, host_binary_name: &OsStr) -> std:
             installed_database.display()
         );
     } else {
-        info!(
-            "Moving initial database {} to installed database: {}",
-            initial_database.display(),
-            installed_database.display()
-        );
-        std::fs::rename(initial_database, installed_database)?;
+        info!("Generating database: {}", installed_database.display());
+
+        SQLiteStorage::create_schema(&rusqlite::Connection::open(installed_database).unwrap())
+            .unwrap();
     }
 
     let executable_argument = executable.display().to_string();
@@ -136,8 +134,10 @@ WantedBy=multi-user.target
         "Installing systemd service file to {}",
         systemd_service_path.display()
     );
+
     std::fs::rename(&temporary_file_path, &systemd_service_path)
         .expect("move temporary service file into systemd directory");
+
     run_systemctl(&["daemon-reload"]).await?;
     run_systemctl(&["enable", SERVICE_FILE_NAME]).await?;
     run_systemctl(&["restart", SERVICE_FILE_NAME]).await?;
