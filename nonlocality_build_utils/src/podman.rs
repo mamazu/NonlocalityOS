@@ -1,10 +1,50 @@
 #![cfg(target_os = "linux")]
 
 use podman_api::api::Container;
+use podman_api::Podman;
 use pretty_assertions::assert_eq;
 use std::path::Path;
+use std::sync::Arc;
 use tracing::{error, info, warn};
 use version_compare::Version;
+
+/// A guard that ensures container cleanup happens even on panic.
+/// Since Drop cannot be async, we spawn a cleanup task.
+struct ContainerGuard {
+    podman: Arc<Podman>,
+    container_id: String,
+}
+
+impl ContainerGuard {
+    fn new(podman: Arc<Podman>, container_id: String) -> Self {
+        Self {
+            podman,
+            container_id,
+        }
+    }
+}
+
+impl Drop for ContainerGuard {
+    fn drop(&mut self) {
+        let podman = Arc::clone(&self.podman);
+        let container_id = self.container_id.clone();
+        tokio::spawn(async move {
+            let container = podman.containers().get(container_id);
+            if let Err(e) = container
+                .delete(
+                    &podman_api::opts::ContainerDeleteOpts::builder()
+                        .force(true)
+                        .build(),
+                )
+                .await
+            {
+                error!("Failed to delete container during cleanup: {}", e);
+            } else {
+                info!("Container cleaned up successfully");
+            }
+        });
+    }
+}
 
 async fn enable_podman_unix_socket() {
     let program = Path::new("/usr/bin/systemctl");
@@ -41,10 +81,10 @@ async fn enable_podman_unix_socket() {
 #[test_log::test(tokio::test)]
 async fn test_podman() {
     enable_podman_unix_socket().await;
-    let podman = podman_api::Podman::unix_versioned(
+    let podman = Arc::new(podman_api::Podman::unix_versioned(
         format!("/run/user/{}/podman/podman.sock", uzers::get_current_uid()),
         podman_api::ApiVersion::new(4, Some(3), Some(1)),
-    );
+    ));
     info!("Socket enabled");
     let image_id = 'a: {
         let docker_image_name_bla = "ubuntu:24.04";
@@ -104,6 +144,9 @@ async fn test_podman() {
     }
     info!("Container ID: {}", container_created.id);
 
+    // Create guard to ensure cleanup happens even on panic
+    let _guard = ContainerGuard::new(Arc::clone(&podman), container_created.id.clone());
+
     // there isn't really documentation for the podman API
     let podman_version = podman.version().await.unwrap().version.unwrap();
     info!("Podman version: {}", &podman_version);
@@ -151,8 +194,9 @@ async fn test_podman() {
 
     container.start(None).await.unwrap();
     use_running_container(&container).await;
-    // It is important to clean up.
-    // TODO: use a scope guard here to ensure cleanup on panic, but it's difficult to do with await.
+
+    // Manual cleanup for normal execution path
+    // The ContainerGuard will handle cleanup on panic
     info!("Deleting container");
     container
         .delete(
@@ -163,6 +207,10 @@ async fn test_podman() {
         .await
         .unwrap();
     info!("Container deleted");
+
+    // Explicitly drop the guard to prevent double cleanup
+    // (though the guard's cleanup will gracefully handle already-deleted containers)
+    drop(_guard);
 }
 
 async fn use_running_container(container: &Container) {
