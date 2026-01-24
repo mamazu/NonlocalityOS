@@ -91,7 +91,8 @@ async fn run_test_case(test_case: &TestCase) -> bool {
         let max_children = test_case.max_children_per_tree.clamp(2, TREE_MAX_CHILDREN);
 
         // Save
-        let saved_result = save_segmented_blob(segments.as_slice(), size_in_bytes, max_children, &storage);
+        let saved_result =
+            save_segmented_blob(segments.as_slice(), size_in_bytes, max_children, &storage);
         let saved = saved_result.await.expect("Failed to save the blob");
 
         // Load saved blob
